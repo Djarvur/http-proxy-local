@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -226,20 +227,34 @@ func dialProxy(u *url.URL) (net.Conn, error) {
 }
 
 // tunnel copies bytes bidirectionally between two connections, returning when
-// either direction completes.
+// both directions complete. When one direction finishes (half-close), we
+// half-close the write side of the peer so the peer's read loop can flush
+// any remaining bytes; we do NOT set a deadline that would abort an
+// in-flight read on the other side (a common bug that drops the last
+// packet of a tunnel).
 func tunnel(a, b net.Conn) {
-	done := make(chan struct{}, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	go func() {
+		defer wg.Done()
 		_, _ = io.Copy(b, a)
-		_ = b.SetDeadline(time.Now()) // unblock the other copy
-		done <- struct{}{}
+		// Half-close: signal to b that a has no more to write. If b is a
+		// *net.TCPConn this lets b's peer finish reading; CloseWrite is
+		// a no-op for non-TCPConns (e.g. tls.Conn).
+		if cw, ok := b.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
 	}()
 	go func() {
+		defer wg.Done()
 		_, _ = io.Copy(a, b)
-		_ = a.SetDeadline(time.Now())
-		done <- struct{}{}
+		if cw, ok := a.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
 	}()
-	<-done
+
+	wg.Wait()
 }
 
 // buildTransport constructs an http.Transport that routes through the upstream
