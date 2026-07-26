@@ -163,18 +163,17 @@ func TestRuntime_Integration(t *testing.T) {
 		t.Errorf("origin saw %d requests, want 1", got)
 	}
 
-	// --- Test 3: hot-reload regenerates PAC ---
-	// Write the new config, then trigger a reload directly (the fsnotify
-	// path is proven in G8's dedicated watcher tests; here we verify the
-	// reload→regen→serve wiring).
-	time.Sleep(150 * time.Millisecond)
+	// --- Test 3: hot-reload via the FILE WATCHER (production path) ---
+	// Edit the config on disk and wait for the fsnotify → debounce →
+	// reload → regen → serve loop to deliver the new PAC. We deliberately
+	// do NOT call orch.Reload() here — that would test only the orchestrator,
+	// not the production hot-reload contract this project exists to deliver.
+	// Generous timeout: macOS fsnotify + 100ms debounce + render can take
+	// up to ~1s on a loaded CI runner.
+	time.Sleep(150 * time.Millisecond) // clear the initial-load debounce window
 	writeFile(t, cfgPath, "listen: 127.0.0.1:0\nupstream:\n  url: \"\"\ngeo:\n  source_url: "+stubRipe.URL+"\n  refresh_interval: 24h\n  retry_interval: 5m\nrouting:\n  whitelist: [\"*.added.example.com\"]\n")
 
-	// Drain any prior errors before the explicit reload below.
-	drainErrors(errs)
-	orch.Reload()
-
-	deadline = time.Now().Add(3 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		pacResp2, err := http.Get(proxyAddr + "/proxy.pac")
 		if err != nil {
@@ -184,11 +183,11 @@ func TestRuntime_Integration(t *testing.T) {
 		body2, _ := io.ReadAll(pacResp2.Body)
 		_ = pacResp2.Body.Close()
 		if contains(string(body2), "*.added.example.com") {
-			return // PASS — hot-reload worked
+			return // PASS — file-watch hot reload worked end-to-end
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("PAC never reflected hot-reloaded whitelist entry")
+	t.Fatal("PAC never reflected the file-watch hot reload (fsnotify → reload → regen → serve)")
 }
 
 func writeFile(t *testing.T, path, content string) {
@@ -211,13 +210,3 @@ func contains(s, sub string) bool {
 type realClock struct{}
 
 func (realClock) Now() time.Time { return time.Now() }
-
-func drainErrors(ch chan error) {
-	for {
-		select {
-		case <-ch:
-		default:
-			return
-		}
-	}
-}
