@@ -1,0 +1,37 @@
+schema: spec-driven
+
+# Project context — shown to AI on every artifact creation.
+context: |
+  Project: http-proxy-local — a self-contained local HTTP routing proxy in Go.
+
+  Tech stack: Go (latest stable). Dependencies: gopkg.in/yaml.v3, github.com/fsnotify/fsnotify.
+
+  Engineering conventions (NON-NEGOTIABLE):
+    1. TDD is mandatory. Every change starts with a failing test that defines the
+       desired behavior, then the minimum implementation to make it pass. No
+       production code without a corresponding test. Refactor only on green.
+    2. A strict golangci-lint configuration MUST exist at the repo root and every
+       commit MUST pass `golangci-lint run` with zero findings. Default linters
+       plus errcheck, govet, staticcheck, unused, ineffassign, gocyclo, gosec,
+       revive, gocritic enabled. Treat warnings as errors.
+    3. The canonical Go skill is `go-ultimate`
+       (https://github.com/Djarvur/go-ultimate). It supersedes and replaces
+       go-best-practices, go-project-setup, golang-code-review, and use-modern-go.
+       All Go work — architecture, conventions, layout, review checklists — MUST
+       route through go-ultimate. Do not invoke the replaced skills.
+
+  Operational conventions:
+    - Config lives at ~/.config/http-proxy-local/config.yaml (hot-reloaded).
+    - Errors-only logging (no request-level logging).
+    - Listen on 127.0.0.1:8080 by default; localhost-only, no auth.
+
+# Per-artifact rules.
+rules:
+  tasks:
+    - "Every implementation task MUST pair with a test-writing task (red phase)
+      that precedes it. TDD is mandatory; do not write tasks that add production
+      code without a corresponding failing test first."
+    - "Include a task to create and enforce the strict golangci-lint config;
+      CI/local gate is `golangci-lint run` with zero findings."
+    - "Route all Go architecture/convention questions through the go-ultimate
+      skill; do not recommend patterns from superseded Go skills."

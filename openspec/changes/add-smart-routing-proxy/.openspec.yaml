@@ -1,0 +1,7 @@
+schema: spec-driven
+created: 2026-07-26
+goal: Build a self-contained local HTTP proxy in Go that cascades to a
+  configurable upstream (HTTP/HTTPS + basic auth), serves a smart PAC file at
+  /proxy.pac that routes RU IPv4 traffic DIRECT and everything else through the
+  upstream, supports white/black list overrides, and hot-reloads config without
+  restart.

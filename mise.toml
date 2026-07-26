@@ -1,0 +1,44 @@
+# mise.toml — pinned tool versions for http-proxy-local.
+#
+# Guarantees every contributor and CI run uses identical tool versions from a
+# clean clone. After cloning: `mise install`, then `mise run <task>` (or
+# `make <task>` — both surfaces are equivalent).
+#
+# The Go version intentionally tracks the latest stable; bump on toolchain
+# upgrades and update .golangci.yml `run.go` to match.
+
+[tools]
+go = "1.26.5"
+golangci-lint = "2.12.2"
+
+# Tasks mirror the Makefile one-to-one so `mise run <task>` and `make <task>`
+# produce identical results.
+
+[tasks.build]
+description = "Compile the binary into ./bin"
+run = "go build -o bin/http-proxy-local ./cmd/http-proxy-local"
+
+[tasks.test]
+description = "Run the full test suite"
+run = "go test ./..."
+
+[tasks.test-race]
+description = "Run tests with the race detector (used by CI)"
+run = "go test -race ./..."
+
+[tasks.lint]
+description = "Run golangci-lint (strict; zero findings required)"
+run = "golangci-lint run ./..."
+
+[tasks.run]
+description = "Build and run locally (set CONFIG=/path to override config)"
+depends = ["build"]
+run = "./bin/http-proxy-local"
+
+[tasks.tidy]
+description = "Normalize go.mod / go.sum"
+run = "go mod tidy"
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "rm -rf bin/"

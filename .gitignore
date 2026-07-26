@@ -1,0 +1,15 @@
+# Build artifacts
+/bin/
+# Stray binaries built at the repo root (e.g. from `go build` without -o).
+/http-proxy-local
+
+# mise local installs (if any land outside ~/.local/share/mise)
+/.mise/
+
+# Agent session artifacts (ZCode, Claude Code) — not project files.
+/.zcode/
+/.claude/
+
+# Editor / OS noise
+.DS_Store
+*.swp
