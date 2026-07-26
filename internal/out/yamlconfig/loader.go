@@ -63,15 +63,20 @@ func (Loader) Validate(c port.Config) error {
 		return fmt.Errorf("%w: listen %q is not host:port: %w", port.ErrValidation, c.Listen, err)
 	}
 
-	u, err := url.Parse(c.Upstream.URL)
-	if err != nil {
-		return fmt.Errorf("%w: upstream.url parse: %w", port.ErrValidation, err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("%w: upstream.url scheme must be http or https, got %q", port.ErrValidation, u.Scheme)
-	}
-	if u.Host == "" {
-		return fmt.Errorf("%w: upstream.url missing host", port.ErrValidation)
+	// An empty upstream URL means "no upstream, connect direct" (useful for
+	// local testing and for deployments where only the PAC matters). Only
+	// validate the scheme/host when a URL is actually set.
+	if c.Upstream.URL != "" {
+		u, err := url.Parse(c.Upstream.URL)
+		if err != nil {
+			return fmt.Errorf("%w: upstream.url parse: %w", port.ErrValidation, err)
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return fmt.Errorf("%w: upstream.url scheme must be http or https, got %q", port.ErrValidation, u.Scheme)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("%w: upstream.url missing host", port.ErrValidation)
+		}
 	}
 
 	if c.Geo.RefreshInterval <= 0 {
