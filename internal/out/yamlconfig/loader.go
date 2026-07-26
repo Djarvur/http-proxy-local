@@ -99,6 +99,12 @@ func (Loader) Validate(c port.Config) error {
 // Note: this intentionally treats "explicitly set to zero" the same as
 // "omitted" — zero durations and empty strings are not useful values for
 // these fields, so defaulting them is safe.
+//
+// For upstream credentials: if Username/Password are empty but the URL
+// contains user:pass@, we extract them from the URL. This supports the
+// common "credentials embedded in the URL" form (e.g.
+// https://user:pass@host:port). The URL is left unchanged — downstream
+// code reads the parsed Username/Password fields, not the URL.
 func applyDefaults(c *port.Config) {
 	if c.Listen == "" {
 		c.Listen = defaultListen
@@ -111,5 +117,26 @@ func applyDefaults(c *port.Config) {
 	}
 	if c.Geo.RetryInterval == 0 {
 		c.Geo.RetryInterval = defaultRetry
+	}
+	extractUpstreamCreds(c)
+}
+
+// extractUpstreamCreds populates Upstream.Username/Password from user:pass@
+// in the URL when those fields are empty. No-op if the URL has no creds or
+// the fields are already set (explicit fields win over URL-embedded ones).
+func extractUpstreamCreds(c *port.Config) {
+	if c.Upstream.URL == "" {
+		return
+	}
+	if c.Upstream.Username != "" || c.Upstream.Password != "" {
+		return
+	}
+	u, err := url.Parse(c.Upstream.URL)
+	if err != nil || u.User == nil {
+		return
+	}
+	c.Upstream.Username = u.User.Username()
+	if p, ok := u.User.Password(); ok {
+		c.Upstream.Password = p
 	}
 }

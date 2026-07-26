@@ -107,6 +107,67 @@ pac:
 	}
 }
 
+// TestLoad_Upstream_CredsExtractedFromURL verifies the common "credentials
+// embedded in URL" form is supported. When upstream.url contains
+// user:pass@host (and username/password fields are empty), the loader MUST
+// populate the Username/Password fields from the URL — otherwise the
+// forwarder and CONNECT tunnel paths silently send no Proxy-Authorization,
+// and the upstream returns 407. This was a real production bug discovered
+// during deployment smoke testing.
+func TestLoad_Upstream_CredsExtractedFromURL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creds in URL populate fields", func(t *testing.T) {
+		t.Parallel()
+		p := writeConfig(t, t.TempDir(), "upstream:\n  url: https://alice:secret@host:3128\n")
+		l := yamlconfig.NewLoader()
+		got, err := l.Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got.Upstream.Username != "alice" {
+			t.Errorf("Username = %q, want alice", got.Upstream.Username)
+		}
+		if got.Upstream.Password != "secret" {
+			t.Errorf("Password = %q, want secret", got.Upstream.Password)
+		}
+		// URL itself stays unchanged (downstream code does not re-parse it).
+		// gosec G101 false positive: hardcoded creds in a test fixture URL.
+		if got.Upstream.URL != "https://alice:secret@host:3128" { //nolint:gosec // G101: test fixture
+			t.Errorf("URL was modified: %q", got.Upstream.URL)
+		}
+	})
+
+	t.Run("explicit fields win over URL creds", func(t *testing.T) {
+		t.Parallel()
+		p := writeConfig(t, t.TempDir(), "upstream:\n  url: https://urluser:urlpass@host:3128\n  username: fielduser\n  password: fieldpass\n")
+		l := yamlconfig.NewLoader()
+		got, err := l.Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got.Upstream.Username != "fielduser" {
+			t.Errorf("Username = %q, want fielduser (explicit field must win)", got.Upstream.Username)
+		}
+		if got.Upstream.Password != "fieldpass" {
+			t.Errorf("Password = %q, want fieldpass (explicit field must win)", got.Upstream.Password)
+		}
+	})
+
+	t.Run("URL without creds leaves fields empty", func(t *testing.T) {
+		t.Parallel()
+		p := writeConfig(t, t.TempDir(), "upstream:\n  url: https://host:3128\n")
+		l := yamlconfig.NewLoader()
+		got, err := l.Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got.Upstream.Username != "" || got.Upstream.Password != "" {
+			t.Errorf("creds should be empty, got %q/%q", got.Upstream.Username, got.Upstream.Password)
+		}
+	})
+}
+
 // TestLoad_PAC_CacheSeconds_ZeroIsExplicit verifies the omitted-vs-zero
 // distinction survives the YAML round-trip. cache_seconds: 0 is the
 // operator's explicit opt-out of caching (→ no-cache header); it must NOT
