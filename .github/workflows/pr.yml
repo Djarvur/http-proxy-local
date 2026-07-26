@@ -1,0 +1,76 @@
+# PR sanity gate: tests with race + coverage floor, strict lint.
+# Per engineering-conventions spec, every PR must pass `golangci-lint run`
+# with zero findings and maintain the coverage threshold below.
+name: pr
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same PR to save cycles.
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # mise reads mise.toml so the Go + golangci-lint versions match local.
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: golangci-lint (strict, zero findings required)
+        run: golangci-lint run ./...
+
+      - name: go test (race + coverage)
+        run: go test -race -coverprofile=cover.out -covermode=atomic ./...
+
+      # PAC precedence tests spawn node; install it so the harness runs in CI.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: go test (PAC harness via node)
+        run: go test -run TestPACPrecedence ./internal/app/
+
+      - name: Enforce coverage floor
+        env:
+          # Tunable: raise as the suite matures. TDD should keep this high.
+          COVERAGE_FLOOR: '40'
+        run: |
+          total=$(go tool cover -func=cover.out | awk '/^total:/ {print $3+0}')
+          echo "Total coverage: ${total}%"
+          if [ "$(echo "$total < $COVERAGE_FLOOR" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${total}% is below floor ${COVERAGE_FLOOR}%"
+            exit 1
+          fi
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: cover.out
+          retention-days: 7
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+      - run: go build ./...

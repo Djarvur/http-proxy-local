@@ -1,0 +1,80 @@
+# Weekly health check: catches dependency regressions, known vulnerabilities,
+# and newly-flagged lint patterns from the latest golangci-lint release.
+#
+# Failures here open as issues (not PR blocks) so they're noticed without
+# breaking in-flight work. Triggered weekly + manual dispatch.
+name: periodic
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+      - run: go test ./...
+
+  dependency-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+
+      # govulncheck: known vulnerabilities in dependencies (call-graph aware,
+      # fewer false positives than naive scanning).
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+      # go list -m -u all: surface outdated modules (informational, non-fatal).
+      - name: List outdated modules
+        run: go list -m -u all 2>/dev/null | grep '\[' || echo "All modules up to date"
+
+  latest-linter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Install the LATEST golangci-lint (not the pinned version) to surface
+      # newly-added lints. Distinct from pr.yml which uses the pinned version
+      # for deterministic gating.
+      - name: Install latest golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh |
+            sh -s -- -b /usr/local/bin
+      - name: Run latest golangci-lint
+        run: golangci-lint run ./...
+
+  open-issue-on-failure:
+    needs: [test, dependency-check, latest-linter]
+    if: always() && (needs.test.result == 'failure' || needs.dependency-check.result == 'failure' || needs.latest-linter.result == 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open issue
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          filename: .github/PERIODIC_FAILURE.md
+          update_existing: true
+          search_existing: open

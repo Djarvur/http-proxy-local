@@ -103,13 +103,13 @@ Implementation order follows dependency: scaffolding → pure logic (high test v
 
 ## 13. CI — GitHub Actions
 
-- [ ] 13.1 Create `.github/workflows/pr.yml` triggered on PR + push to main: install Go (via the `mise.toml` pinning from 1.5) and `golangci-lint`; run `go test ./... -race -coverprofile=cover.out`; enforce a coverage floor (e.g. fail if total coverage drops below a threshold; record the threshold in the workflow as a variable so it's tunable); run `golangci-lint run` (strict config from 1.3, must be 0 findings). Fail the check on any red step. Upload `cover.out` as a build artifact.
-- [ ] 13.2 Create `.github/workflows/periodic.yml` triggered on schedule (e.g. `cron: "0 6 * * 1"` weekly) and manual dispatch: (a) `go test ./...` — catches dependency regressions; (b) dependency update check — run `go list -m -u all` (or `govulncheck`) and surface outdated/vulnerable modules; (c) `golangci-lint run` against the latest linter release to catch newly-flagged patterns. On any failure, open an issue (or fail loudly) so it's not silently ignored.
+- [x] 13.1 Create `.github/workflows/pr.yml` triggered on PR + push to main: install Go (via the `mise.toml` pinning from 1.5) and `golangci-lint`; run `go test ./... -race -coverprofile=cover.out`; enforce a coverage floor (e.g. fail if total coverage drops below a threshold; record the threshold in the workflow as a variable so it's tunable); run `golangci-lint run` (strict config from 1.3, must be 0 findings). Fail the check on any red step. Upload `cover.out` as a build artifact.
+- [x] 13.2 Create `.github/workflows/periodic.yml` triggered on schedule (e.g. `cron: "0 6 * * 1"` weekly) and manual dispatch: (a) `go test ./...` — catches dependency regressions; (b) dependency update check — run `go list -m -u all` (or `govulncheck`) and surface outdated/vulnerable modules; (c) `golangci-lint run` against the latest linter release to catch newly-flagged patterns. On any failure, open an issue (or fail loudly) so it's not silently ignored.
 
 ## 14. Hardening & acceptance
 
-- [ ] 14.1 Run `make lint` and resolve any findings at the source (no suppressions). Confirm zero findings.
-- [ ] 14.2 Run `make test` end-to-end; confirm all green.
-- [ ] 14.3 Manual smoke test: start binary against the real RIPE URL, point macOS PAC at `http://127.0.0.1:8080/proxy.pac`, verify RU site routes DIRECT and non-RU routes through upstream (verify via upstream logs or a tcpdump).
-- [ ] 14.4 Manual hot-reload smoke test: edit config whitelist while running, verify next `/proxy.pac` GET returns updated bytes within the debounce window.
-- [ ] 14.5 Verify each capability spec scenario has a corresponding passing test or manual demonstration; record any scenario covered only manually in the change archive notes.
+- [x] 14.1 Run `make lint` and resolve any findings at the source (no suppressions). Confirm zero findings.
+- [x] 14.2 Run `make test` end-to-end; confirm all green.
+- [x] 14.3 Manual smoke test: start binary against the real RIPE URL, point macOS PAC at `http://127.0.0.1:8080/proxy.pac`, verify RU site routes DIRECT and non-RU routes through upstream (verify via upstream logs or a tcpdump).
+- [x] 14.4 Manual hot-reload smoke test: edit config whitelist while running, verify next `/proxy.pac` GET returns updated bytes within the debounce window.
+- [x] 14.5 Verify each capability spec scenario has a corresponding passing test or manual demonstration; record any scenario covered only manually in the change archive notes.
