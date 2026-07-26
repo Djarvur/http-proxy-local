@@ -86,6 +86,12 @@ func (Loader) Validate(c port.Config) error {
 		return fmt.Errorf("%w: geo.retry_interval must be positive, got %v", port.ErrValidation, c.Geo.RetryInterval)
 	}
 
+	// pac.cache_seconds: nil (omitted) and 0 (explicit opt-out) are both
+	// valid. Only negative values are rejected.
+	if c.PAC.CacheSeconds != nil && *c.PAC.CacheSeconds < 0 {
+		return fmt.Errorf("%w: pac.cache_seconds must be non-negative when set, got %d", port.ErrValidation, *c.PAC.CacheSeconds)
+	}
+
 	return nil
 }
 

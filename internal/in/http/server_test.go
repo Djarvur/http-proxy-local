@@ -35,6 +35,17 @@ func loadCfg(u port.Upstream) *atomic.Pointer[port.Config] {
 	return p
 }
 
+// loadCfgWithPAC returns a published configPtr whose PAC.CacheSeconds is set
+// to sec. Pass a pointer-to-int helper to distinguish nil (omitted) from 0.
+func loadCfgWithPAC(sec *int) *atomic.Pointer[port.Config] {
+	p := &atomic.Pointer[port.Config]{}
+	c := port.Config{Listen: "127.0.0.1:0", PAC: port.PAC{CacheSeconds: sec}}
+	p.Store(&c)
+	return p
+}
+
+func intptr(i int) *int { return &i }
+
 // upstreamEcho is a minimal origin server that echoes the request line + body.
 func upstreamEcho() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,25 +75,70 @@ func TestServePAC_StatusAndContentType(t *testing.T) {
 	}
 }
 
-// TestServePAC_DisablesCaching locks in the no-cache behavior. macOS does
-// not re-fetch the PAC on a fixed timer — it honors HTTP cache headers, and
-// with no Cache-Control the system heuristically caches for up to ~2 hours.
-// For a hot-reloading PAC that's unacceptable: config edits would take that
-// long to reach the browser. We force revalidation on every fetch.
-func TestServePAC_DisablesCaching(t *testing.T) {
+// TestServePAC_CacheHeaders locks in the configurable cache TTL behavior.
+// macOS does not re-fetch the PAC on a fixed timer — it honors HTTP cache
+// headers — so the value we emit on /proxy.pac directly controls how
+// quickly hot-reloaded config reaches the browser. The TTL is read from
+// the live config per request, so editing pac.cache_seconds applies to the
+// next request without restart.
+func TestServePAC_CacheHeaders(t *testing.T) {
 	t.Parallel()
-	pac := loadPAC(t, "var PAC=1;\n")
-	h := httpserver.New(nil, pac)
 
-	req := httptest.NewRequest(http.MethodGet, httpserver.PACPath, nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
-		t.Errorf("Cache-Control = %q, want %q (PAC must not be cached; hot-reload depends on this)", got, "no-cache")
+	tests := []struct {
+		name           string
+		cfgPtr         *atomic.Pointer[port.Config]
+		wantCacheCtrl string
+		wantPragma     string
+	}{
+		{
+			name:           "omitted (nil pointer) yields default max-age",
+			cfgPtr:         loadCfgWithPAC(nil),
+			wantCacheCtrl: "max-age=15, must-revalidate",
+			wantPragma:     "",
+		},
+		{
+			name:           "explicit 0 means no-cache (operator opt-out)",
+			cfgPtr:         loadCfgWithPAC(intptr(0)),
+			wantCacheCtrl: "no-cache",
+			wantPragma:     "no-cache",
+		},
+		{
+			name:           "explicit 30 yields max-age=30",
+			cfgPtr:         loadCfgWithPAC(intptr(30)),
+			wantCacheCtrl: "max-age=30, must-revalidate",
+			wantPragma:     "",
+		},
+		{
+			name:           "explicit 1 yields max-age=1",
+			cfgPtr:         loadCfgWithPAC(intptr(1)),
+			wantCacheCtrl: "max-age=1, must-revalidate",
+			wantPragma:     "",
+		},
+		{
+			name:           "nil configPtr falls back to no-cache (safe default)",
+			cfgPtr:         nil,
+			wantCacheCtrl: "no-cache",
+			wantPragma:     "no-cache",
+		},
 	}
-	if got := rec.Header().Get("Pragma"); got != "no-cache" {
-		t.Errorf("Pragma = %q, want %q (legacy HTTP/1.0 cache busting)", got, "no-cache")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pac := loadPAC(t, "var PAC=1;\n")
+			h := httpserver.New(tt.cfgPtr, pac)
+
+			req := httptest.NewRequest(http.MethodGet, httpserver.PACPath, nil)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if got := rec.Header().Get("Cache-Control"); got != tt.wantCacheCtrl {
+				t.Errorf("Cache-Control = %q, want %q", got, tt.wantCacheCtrl)
+			}
+			if got := rec.Header().Get("Pragma"); got != tt.wantPragma {
+				t.Errorf("Pragma = %q, want %q", got, tt.wantPragma)
+			}
+		})
 	}
 }
 

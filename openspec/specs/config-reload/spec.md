@@ -22,7 +22,7 @@ The system SHALL watch `~/.config/http-proxy-local/config.yaml` for changes usin
 
 ### Requirement: Parse and validate config on change
 
-On each reload trigger, the system SHALL re-read and re-parse the config file into the typed Config structure. The system SHALL validate the parsed config: required fields present, `listen` parses as `host:port`, `upstream.url` is a valid `http` or `https` URL, `geo.refresh_interval` and `geo.retry_interval` are positive durations. A reload that fails parsing or validation SHALL be rejected: the system SHALL log the error, retain the previously-valid config unchanged, and continue serving on it. A rejected reload SHALL NOT swap any state.
+On each reload trigger, the system SHALL re-read and re-parse the config file into the typed Config structure. The system SHALL validate the parsed config: required fields present, `listen` parses as `host:port`, `upstream.url` is a valid `http` or `https` URL (or empty for direct mode), `geo.refresh_interval` and `geo.retry_interval` are positive durations, and `pac.cache_seconds` (when set) is non-negative. A reload that fails parsing or validation SHALL be rejected: the system SHALL log the error, retain the previously-valid config unchanged, and continue serving on it. A rejected reload SHALL NOT swap any state.
 
 #### Scenario: Valid config reload
 - **WHEN** the config file is changed to a syntactically valid and semantically valid configuration
@@ -56,6 +56,7 @@ A successful reload SHALL publish the new config via an atomic swap (e.g. `atomi
 After a successful config swap, the system SHALL evaluate which fields changed and trigger the appropriate downstream effects:
 
 - A change to `upstream.url`, `upstream.username`, or `upstream.password` SHALL be picked up by the proxy handler for subsequently forwarded requests (no explicit signal required beyond the atomic swap, since the handler reads the live config per-request).
+- A change to `pac.cache_seconds` SHALL be picked up by the `/proxy.pac` handler on the next request (no explicit signal required — the handler reads the live config per-request to derive the `Cache-Control` header).
 - A change to `listen` SHALL log an error explaining that a restart is required (the listener is not re-bound mid-flight in v1).
 - A change to `whitelist`, `blacklist`, or `listen` SHALL signal the PAC generator to regenerate the PAC snapshot.
 - A change to `geo.source_url`, `geo.refresh_interval`, or `geo.retry_interval` SHALL signal the geo-data fetcher to apply the new source/interval to subsequent refreshes. A `geo.source_url` change SHALL NOT trigger an immediate fetch.

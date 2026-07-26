@@ -58,3 +58,21 @@ routing:
     - "*.internal.corp"
     - "banking.example.com"
     # - "192.168.0.0/16"  # forces all of 192.168.x direct (also default behavior)
+
+# PAC serving options. Currently just the cache TTL on the /proxy.pac
+# response, exposed as the Cache-Control header.
+pac:
+  # Cache TTL in seconds for the served PAC, emitted as
+  # `Cache-Control: max-age=N, must-revalidate`. macOS does not re-read
+  # the PAC on a fixed timer — it honors this header — so the value
+  # bounds how quickly hot-reloaded config reaches the browser.
+  #
+  # - omitted       → default 15s (good balance: short enough that edits
+  #                  reach the browser within ~15s, long enough that the
+  #                  PAC isn't refetched on every request)
+  # - 0             → disable caching (emit `Cache-Control: no-cache`);
+  #                  the browser revalidates on every fetch. Use when
+  #                  you're iterating on config and want instant pickup.
+  # - N > 0         → cache for N seconds
+  # Negative values are rejected by the validator.
+  cache_seconds: 15

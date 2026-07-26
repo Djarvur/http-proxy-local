@@ -20,6 +20,7 @@ type Config struct {
 	Upstream Upstream `yaml:"upstream"`
 	Geo      Geo      `yaml:"geo"`
 	Routing  Routing  `yaml:"routing"`
+	PAC      PAC      `yaml:"pac"`
 }
 
 // Upstream describes the cascaded proxy all non-PAC traffic is forwarded to.
@@ -44,6 +45,39 @@ type Geo struct {
 type Routing struct {
 	Whitelist []string `yaml:"whitelist"`
 	Blacklist []string `yaml:"blacklist"`
+}
+
+// PAC governs how the /proxy.pac HTTP response is served. Currently the only
+// knob is the cache TTL, but the struct exists so future PAC-serving options
+// (path override, content-type variants, etc.) have a home.
+type PAC struct {
+	// CacheSeconds controls the max-age of the served PAC, in seconds.
+	//
+	// This is a *int (not int) deliberately: most config fields use the
+	// "zero value means default" convention, but for this field zero is a
+	// meaningful operator choice (disable caching entirely → no-cache).
+	// The pointer distinguishes:
+	//   - nil  → field omitted in YAML → loader applies the default (15s)
+	//   - &0   → operator explicitly wrote cache_seconds: 0 → no-cache
+	//   - &N>0 → operator-set value, used as max-age
+	// Use EffectiveCacheSeconds(default) to resolve to a concrete int.
+	CacheSeconds *int `yaml:"cache_seconds"`
+}
+
+// DefaultPACCacheSeconds is the max-age applied when pac.cache_seconds is
+// omitted. Chosen for a balance: short enough that hot-reloaded config
+// reaches the browser within ~15s, long enough that the PAC isn't refetched
+// on every single request.
+const DefaultPACCacheSeconds = 15
+
+// EffectiveCacheSeconds resolves the configured cache TTL to a concrete int.
+// Returns defaultSec when CacheSeconds is nil (omitted in config); returns
+// the pointed-to value otherwise (including 0, the explicit no-cache opt-in).
+func (p PAC) EffectiveCacheSeconds(defaultSec int) int {
+	if p.CacheSeconds == nil {
+		return defaultSec
+	}
+	return *p.CacheSeconds
 }
 
 // Range is a single inclusive [Low, High] uint32 IPv4 numeric range, the

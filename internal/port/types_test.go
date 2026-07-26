@@ -88,3 +88,36 @@ func TestPACInputAndRanges(t *testing.T) {
 		t.Errorf("PACInput.Listen = %q", in.Listen)
 	}
 }
+
+// TestPAC_EffectiveCacheSeconds locks in the omitted-vs-explicit-zero
+// distinction. The field is a pointer so the loader can tell "field absent"
+// (nil → default applies) from "operator wrote cache_seconds: 0" (explicit
+// opt-out of caching). This is the one field that breaks the "zero means
+// default" convention used elsewhere; it's documented on the type.
+func TestPAC_EffectiveCacheSeconds(t *testing.T) {
+	t.Parallel()
+
+	const defaultSec = 15
+
+	tests := []struct {
+		name string
+		pac  port.PAC
+		want int
+	}{
+		{name: "nil pointer (omitted) yields default", pac: port.PAC{CacheSeconds: nil}, want: defaultSec},
+		{name: "explicit zero means no-cache", pac: port.PAC{CacheSeconds: intPtr(0)}, want: 0},
+		{name: "explicit positive passes through", pac: port.PAC{CacheSeconds: intPtr(30)}, want: 30},
+		{name: "explicit one passes through", pac: port.PAC{CacheSeconds: intPtr(1)}, want: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.pac.EffectiveCacheSeconds(defaultSec); got != tt.want {
+				t.Errorf("EffectiveCacheSeconds(%d) = %d, want %d", defaultSec, got, tt.want)
+			}
+		})
+	}
+}
+
+func intPtr(i int) *int { return &i }

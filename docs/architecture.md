@@ -223,13 +223,27 @@ the default `PROXY` rule.
 
 ### Cache headers
 
-The PAC response carries `Cache-Control: no-cache` and `Pragma: no-cache`.
-macOS does not re-read the PAC on a fixed timer — it honors HTTP cache
-headers, and without `Cache-Control` the system heuristically caches for
-up to ~2 hours. That would silently defeat the hot-reload contract
-(config edits must reach the browser promptly). Forcing revalidation on
-every fetch keeps end-to-end latency bounded by the browser's request
-frequency, not by an opaque cache TTL.
+The PAC response carries a configurable `Cache-Control` header derived
+from `pac.cache_seconds` in the live config (read per request, so
+hot-reload applies without restart):
+
+| `pac.cache_seconds` | Emitted header | Meaning |
+|---|---|---|
+| omitted | `max-age=15, must-revalidate` | Default TTL: browser revalidates within ~15s |
+| `0` | `no-cache` (+ `Pragma: no-cache`) | Operator opt-out: revalidate every fetch |
+| `N > 0` | `max-age=N, must-revalidate` | Custom TTL |
+
+The `must-revalidate` directive forbids clients from serving a stale PAC
+if revalidation fails (e.g. proxy briefly unreachable) — better to drop
+the PAC than to route on stale rules. macOS does not re-read the PAC on
+a fixed timer; it honors this header, so the TTL directly bounds how
+quickly hot-reloaded config reaches the browser.
+
+The `pac.cache_seconds` field is a `*int` in the Config struct (not a
+plain int) so the loader can distinguish "field omitted in YAML" (nil →
+default applies) from "operator wrote `cache_seconds: 0`" (explicit
+opt-out). This is the one field that breaks the "zero means default"
+convention used elsewhere; it's documented on the type.
 
 ## CI
 

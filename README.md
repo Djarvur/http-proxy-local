@@ -103,8 +103,9 @@ through your configured upstream.
 The config file is watched with fsnotify. **Edit `config.yaml`, save, and
 the next `/proxy.pac` fetch reflects the new rules.** No restart needed.
 
-- Changes to `upstream.*`, `routing.*`, `geo.refresh_interval`,
-  `geo.retry_interval` apply immediately to subsequent requests.
+- Changes to `upstream.*`, `routing.*`, `pac.cache_seconds`,
+  `geo.refresh_interval`, `geo.retry_interval` apply immediately to
+  subsequent requests.
 - Changes to `listen` (the bind address) require a restart — the proxy
   logs a `restart required` warning when this happens, since you almost
   certainly want to know your listen address moved.
@@ -116,16 +117,23 @@ the next `/proxy.pac` fetch reflects the new rules.** No restart needed.
 
 ### How quickly does the browser pick up the change?
 
-End-to-end latency is ~400ms from config save to PAC swap on disk. **The
-browser sees the change on its next PAC fetch** — macOS does not re-read
-the PAC on a fixed timer; it honors HTTP cache headers, and we serve the
-PAC with `Cache-Control: no-cache` so the system revalidates on every
-request. Without that header, browsers heuristically cache the PAC for
-up to ~2 hours, which would silently defeat hot-reload.
+Two latencies compound:
 
-If you ever edit the config and the browser doesn't pick it up within a
-few seconds, toggle **System Settings → Network → Proxies → Automatic
-Proxy Configuration** off and on, or run:
+1. **Config save → PAC swap on disk:** ~400ms (fsnotify + debounce +
+   render). This is the proxy's internal hot-reload, always fast.
+2. **PAC swap → browser re-fetches it:** bounded by the PAC's
+   `Cache-Control: max-age`. macOS does not re-read the PAC on a fixed
+   timer — it honors HTTP cache headers.
+
+The PAC cache TTL is configurable via `pac.cache_seconds` (default 15).
+With the default, the browser revalidates within ~15s of an edit. Set
+`pac.cache_seconds: 0` to disable caching entirely (the browser
+revalidates on every request — useful while iterating on config). See
+[`config.example.yaml`](./config.example.yaml) for the full semantics.
+
+If you ever edit the config and the browser doesn't pick it up within
+the expected window, toggle **System Settings → Network → Proxies →
+Automatic Proxy Configuration** off and on, or run:
 
 ```bash
 networksetup -setautoproxyurl "Wi-Fi" "http://127.0.0.1:8080/proxy.pac"

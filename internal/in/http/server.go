@@ -37,7 +37,7 @@ const connectTimeout = 30 * time.Second
 // dispatches by path. A custom handler dispatching on the URL path (for PAC)
 // vs everything-else (forward) is the correct proxy semantics.
 func New(configPtr *atomic.Pointer[port.Config], pacPtr *atomic.Pointer[[]byte]) http.Handler {
-	pacHandler := servePAC(pacPtr)
+	pacHandler := servePAC(configPtr, pacPtr)
 	forwardHandler := forward(configPtr)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL != nil && r.URL.Path == PACPath && r.Method == http.MethodGet {
@@ -48,8 +48,9 @@ func New(configPtr *atomic.Pointer[port.Config], pacPtr *atomic.Pointer[[]byte])
 	})
 }
 
-// servePAC returns the handler that serves the current PAC snapshot.
-func servePAC(pacPtr *atomic.Pointer[[]byte]) http.HandlerFunc {
+// servePAC returns the handler that serves the current PAC snapshot with
+// cache headers derived from the live config's pac.cache_seconds.
+func servePAC(configPtr *atomic.Pointer[port.Config], pacPtr *atomic.Pointer[[]byte]) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		if pacPtr == nil {
 			http.Error(w, "PAC not ready", http.StatusServiceUnavailable)
@@ -61,18 +62,38 @@ func servePAC(pacPtr *atomic.Pointer[[]byte]) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", contentTypePAC)
-		// macOS does NOT re-fetch the PAC on a fixed timer — it honors HTTP
-		// cache headers. With no Cache-Control, the system heuristically
-		// caches for up to ~2 hours, which would defeat our hot-reload
-		// contract (config edits must reach the browser promptly). Force
-		// revalidation on every fetch. The cost is negligible: the PAC is
-		// ~190KB and the request is to localhost.
-		w.Header().Set("Cache-Control", "no-cache")
-		// Pragma is the HTTP/1.0 equivalent; harmless on 1.1, helps older
-		// or quirky clients.
-		w.Header().Set("Pragma", "no-cache")
+		setPACCacheHeaders(w, configPtr)
 		_, _ = w.Write(*pac)
 	}
+}
+
+// setPACCacheHeaders emits the Cache-Control header per the live config:
+//
+//   - pac.cache_seconds omitted (nil) → default TTL (15s) → max-age=15, must-revalidate
+//   - pac.cache_seconds = 0           → operator opt-out  → no-cache (+ Pragma: no-cache)
+//   - pac.cache_seconds = N > 0       → max-age=N, must-revalidate
+//
+// must-revalidate forbids clients from serving a stale PAC if revalidation
+// fails (e.g. proxy briefly unreachable) — better to drop the PAC than to
+// route on stale rules. Reading per request means hot-reloaded
+// pac.cache_seconds applies to the next request without restart.
+//
+// When configPtr is nil or holds no published config, we fall back to
+// no-cache (the safest choice — never accidentally serve a long-cached PAC
+// when we don't know the operator's intent).
+func setPACCacheHeaders(w http.ResponseWriter, configPtr *atomic.Pointer[port.Config]) {
+	seconds := 0 // safe default if config unavailable
+	if configPtr != nil {
+		if c := configPtr.Load(); c != nil {
+			seconds = c.PAC.EffectiveCacheSeconds(port.DefaultPACCacheSeconds)
+		}
+	}
+	if seconds <= 0 {
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Pragma", "no-cache")
+		return
+	}
+	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, must-revalidate", seconds))
 }
 
 // forward returns a handler that proxies plain-HTTP requests and CONNECT.
