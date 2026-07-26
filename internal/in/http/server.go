@@ -5,18 +5,14 @@
 package httpserver
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
-	"strings"
-	"sync"
 	"sync/atomic"
-	"time"
 
+	"github.com/Djarvur/http-proxy-local/internal/in/cascade"
 	"github.com/Djarvur/http-proxy-local/internal/port"
 )
 
@@ -25,9 +21,6 @@ const PACPath = "/proxy.pac"
 
 // contentTypePAC is the standard PAC MIME type.
 const contentTypePAC = "application/x-ns-proxy-autoconfig"
-
-// connectTimeout bounds the dial+CONNECT handshake to the upstream.
-const connectTimeout = 30 * time.Second
 
 // New returns an http.Handler that serves /proxy.pac from pacPtr and forwards
 // everything else to the configured upstream via configPtr.
@@ -173,7 +166,7 @@ func handleConnect(w http.ResponseWriter, r *http.Request, configPtr *atomic.Poi
 		return
 	}
 
-	upstreamConn, err := dialUpstream(cfg.Upstream, target)
+	upstreamConn, err := cascade.Dial(cfg.Upstream, target)
 	if err != nil {
 		log.Printf("CONNECT %s: upstream handshake: %v", target, err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -189,103 +182,7 @@ func handleConnect(w http.ResponseWriter, r *http.Request, configPtr *atomic.Poi
 	defer func() { _ = clientConn.Close() }()
 
 	_, _ = clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-	tunnel(clientConn, upstreamConn)
-}
-
-// dialUpstream connects to the configured upstream proxy, sends a CONNECT
-// for the target, and returns the established tunnel connection.
-func dialUpstream(u port.Upstream, target string) (net.Conn, error) {
-	if u.URL == "" {
-		// No upstream configured — connect directly. (Useful for local testing.)
-		return net.DialTimeout("tcp", target, connectTimeout)
-	}
-
-	parsed, err := url.Parse(u.URL)
-	if err != nil {
-		return nil, fmt.Errorf("parse upstream url: %w", err)
-	}
-
-	conn, err := dialProxy(parsed)
-	if err != nil {
-		return nil, fmt.Errorf("dial upstream: %w", err)
-	}
-
-	// Send CONNECT.
-	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", target, target)
-	if u.Username != "" && u.Password != "" {
-		req += "Proxy-Authorization: Basic " + basicAuth(u.Username, u.Password) + "\r\n"
-	}
-	req += "\r\n"
-	if _, err := conn.Write([]byte(req)); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("write CONNECT: %w", err)
-	}
-
-	// Read response status line + headers.
-	br := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(br, nil)
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("read CONNECT response: %w", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		_ = conn.Close()
-		return nil, fmt.Errorf("upstream CONNECT returned %d", resp.StatusCode)
-	}
-
-	// If bufio cached any bytes from the response body, they're already part
-	// of the tunnel — wrap the conn so reads see them first.
-	if br.Buffered() > 0 {
-		return &bufferedConn{r: br, Conn: conn}, nil
-	}
-	return conn, nil
-}
-
-// dialProxy dials the proxy host with the appropriate transport (TLS for
-// https upstream URLs, plain TCP otherwise).
-func dialProxy(u *url.URL) (net.Conn, error) {
-	host := u.Host
-	if u.Scheme == "https" && !strings.Contains(host, ":") {
-		host += ":443"
-	} else if u.Scheme == "http" && !strings.Contains(host, ":") {
-		host += ":80"
-	}
-	if u.Scheme == "https" {
-		return tlsDial("tcp", host)
-	}
-	return net.DialTimeout("tcp", host, connectTimeout)
-}
-
-// tunnel copies bytes bidirectionally between two connections, returning when
-// both directions complete. When one direction finishes (half-close), we
-// half-close the write side of the peer so the peer's read loop can flush
-// any remaining bytes; we do NOT set a deadline that would abort an
-// in-flight read on the other side (a common bug that drops the last
-// packet of a tunnel).
-func tunnel(a, b net.Conn) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(b, a)
-		// Half-close: signal to b that a has no more to write. If b is a
-		// *net.TCPConn this lets b's peer finish reading; CloseWrite is
-		// a no-op for non-TCPConns (e.g. tls.Conn).
-		if cw, ok := b.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		_, _ = io.Copy(a, b)
-		if cw, ok := a.(interface{ CloseWrite() error }); ok {
-			_ = cw.CloseWrite()
-		}
-	}()
-
-	wg.Wait()
+	cascade.Tunnel(clientConn, upstreamConn)
 }
 
 // buildTransport constructs an http.Transport that routes through the upstream
@@ -311,13 +208,6 @@ func setBasicAuth(r *http.Request, user, pass string) {
 	r.SetBasicAuth(user, pass)
 }
 
-// basicAuth returns the base64-encoded "user:pass" string for the
-// Proxy-Authorization header. (Equivalent to http.BasicAuth but standalone
-// for the manual CONNECT path.)
-func basicAuth(user, pass string) string {
-	return base64StdEncoding(user + ":" + pass)
-}
-
 // copyHeaders copies src to dst verbatim.
 func copyHeaders(dst, src http.Header) {
 	for k, vs := range src {
@@ -333,16 +223,4 @@ func loadConfig(p *atomic.Pointer[port.Config]) *port.Config {
 		return nil
 	}
 	return p.Load()
-}
-
-// bufferedConn wraps a net.Conn but serves buffered bytes first from a
-// bufio.Reader. Used when CONNECT's response read left tunnel bytes in the
-// reader's buffer.
-type bufferedConn struct {
-	r *bufio.Reader
-	net.Conn
-}
-
-func (c *bufferedConn) Read(p []byte) (int, error) {
-	return c.r.Read(p)
 }
