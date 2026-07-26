@@ -1,0 +1,60 @@
+# http-proxy-local example configuration.
+#
+# Copy to ~/.config/http-proxy-local/config.yaml and edit. Every field has
+# a default; you only need to set the fields you want to override.
+#
+# This file is hot-reloaded: save your changes and the next /proxy.pac
+# request reflects them. (Changes to `listen` require a restart.)
+
+# Local bind address for the proxy + PAC server. Default 127.0.0.1:8080.
+# Use 127.0.0.1 (not 0.0.0.0) unless you have a reason to expose the proxy
+# beyond localhost — it has no client auth.
+listen: 127.0.0.1:8080
+
+# Upstream proxy all non-PAC requests cascade to.
+upstream:
+  # URL of the upstream proxy. May be http:// or https:// (the scheme
+  # applies to the connection TO the upstream, not to the requests it
+  # forwards). An empty string means "no upstream, connect direct" —
+  # useful for testing or for deployments where only the PAC matters.
+  url: https://upstream.example.com:3128
+
+  # Optional basic auth credentials for the upstream proxy. Sent as
+  # Proxy-Authorization. If either is empty, no auth header is added.
+  username: ""
+  password: ""
+
+# RU geo-data fetcher.
+geo:
+  # Source URL for the RIPE delegation list. Override only if you want a
+  # mirror or a different RIR's data.
+  # Default: https://ftp.ripe.net/pub/stats/ripencc/delegated-ripencc-latest
+  source_url: https://ftp.ripe.net/pub/stats/ripencc/delegated-ripencc-latest
+
+  # Interval between successful refreshes. Default 24h.
+  refresh_interval: 24h
+
+  # Interval after a failed refresh, repeating until success. Should be
+  # much shorter than refresh_interval so a transient outage recovers
+  # quickly. Default 5m.
+  retry_interval: 5m
+
+# Routing overrides. Applied by the PAC before the RU geo rule.
+routing:
+  # Whitelist: force these hosts through the upstream proxy, overriding
+  # local-network and RU geo rules. (Cannot override blacklist.)
+  #
+  # Entries match by suffix (*.example.com matches example.com and any
+  # subdomain) or by CIDR (10.0.0.0/8 matches any IP in that range).
+  whitelist:
+    - "*.forced.example.com"
+    - "exact.example.org"
+    # - "10.0.0.0/8"      # forces ALL of 10.x through the upstream
+
+  # Blacklist: force these hosts to connect DIRECT, overriding whitelist,
+  # local-network, and RU geo. Use for hosts that must NEVER traverse the
+  # upstream (e.g. internal corp hostnames, banking sites).
+  blacklist:
+    - "*.internal.corp"
+    - "banking.example.com"
+    # - "192.168.0.0/16"  # forces all of 192.168.x direct (also default behavior)
