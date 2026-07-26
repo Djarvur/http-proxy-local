@@ -190,10 +190,164 @@ func TestRuntime_Integration(t *testing.T) {
 	t.Fatal("PAC never reflected the file-watch hot reload (fsnotify → reload → regen → serve)")
 }
 
+// TestRuntime_HotReload_EditorSafeSave exercises the canonical "safe save"
+// pattern that real editors use (vim, emacs, VS Code, etc.): write a sibling
+// temp file, fsync it, then atomically rename over the original. This
+// triggers a different fsnotify event sequence than in-place writes on macOS
+// (FSEvents can deliver Rename+Create rather than Write), so it must be
+// tested separately from TestRuntime_Integration which uses os.WriteFile.
+//
+// Without this test, a regression in the rename-into-path branch of the
+// watcher's matches() function would slip through — the editor case is the
+// primary real-world save pattern.
+func TestRuntime_HotReload_EditorSafeSave(t *testing.T) {
+	stubRipe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ripencc|RU|ipv4|1.2.3.0|256|x|x\n"))
+	}))
+	defer stubRipe.Close()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	cachePath := filepath.Join(dir, "ru.cache")
+	writeFile(t, cfgPath, "listen: 127.0.0.1:0\nupstream:\n  url: \"\"\ngeo:\n  source_url: "+stubRipe.URL+"\n  refresh_interval: 24h\n  retry_interval: 5m\nrouting:\n  whitelist: [\"before-save.example.com\"]\n")
+
+	loader := yamlconfig.NewLoader()
+	cache := fscache.New()
+	clock := realClock{}
+	src := ripe.New(10 * time.Second)
+	rangesPtr := &atomic.Pointer[port.RURanges]{}
+	regen := make(chan struct{}, 8)
+	errs := make(chan error, 8)
+	cfgPtr := &atomic.Pointer[port.Config]{}
+	pacPtr := &atomic.Pointer[[]byte]{}
+
+	initial, err := loader.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	cfgPtr.Store(&initial)
+
+	stopRegen := app.RunPACRegenerator(regen, cfgPtr, rangesPtr, pacPtr)
+	defer stopRegen()
+
+	fetcher := app.NewGeoFetcher(app.GeoFetcherDeps{
+		Source: src, Cache: cache, Clock: clock,
+		SourceURL: initial.Geo.SourceURL, CachePath: cachePath,
+		Refresh:   initial.Geo.RefreshInterval,
+		Retry:     initial.Geo.RetryInterval,
+		RangesPtr: rangesPtr, Regen: regen, Errs: errs,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fetcherDone := make(chan struct{})
+	go func() { fetcher.Run(ctx); close(fetcherDone) }()
+	defer func() { cancel(); <-fetcherDone }()
+
+	watcher, err := fsnotify.New(ctx, cfgPath, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("watcher: %v", err)
+	}
+	orch := app.NewReloadOrchestrator(loader, cfgPath, cfgPtr, regen, errs)
+	go func() {
+		for range watcher.C() {
+			orch.Reload()
+		}
+	}()
+
+	if !waitForPAC(t, pacPtr, 5*time.Second) {
+		t.Fatal("initial PAC never generated")
+	}
+
+	// Bind + wait for first PAC.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	srv := &http.Server{
+		Handler:           httpserver.New(cfgPtr, pacPtr),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	srvDone := make(chan struct{})
+	go func() { _ = srv.Serve(ln); close(srvDone) }()
+	defer func() { _ = srv.Shutdown(context.Background()); <-srvDone }()
+	proxyAddr := "http://" + ln.Addr().String()
+
+	// Confirm the before-save entry is present.
+	if !waitForPACContains(t, proxyAddr, "before-save.example.com", 3*time.Second) {
+		t.Fatal("initial PAC missing before-save entry")
+	}
+
+	// Editor safe-save: write temp in same dir, fsync, rename over original.
+	time.Sleep(150 * time.Millisecond) // clear debounce window
+	saveLikeEditor(t, cfgPath, "listen: 127.0.0.1:0\nupstream:\n  url: \"\"\ngeo:\n  source_url: "+stubRipe.URL+"\n  refresh_interval: 24h\n  retry_interval: 5m\nrouting:\n  whitelist: [\"after-save.example.com\"]\n")
+
+	if !waitForPACContains(t, proxyAddr, "after-save.example.com", 5*time.Second) {
+		t.Fatal("editor safe-save did not propagate to PAC (rename-into-path broken)")
+	}
+
+	// Confirm the old entry is gone.
+	resp, err := http.Get(proxyAddr + "/proxy.pac")
+	if err != nil {
+		t.Fatalf("final PAC fetch: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if contains(string(body), "before-save.example.com") {
+		t.Error("stale entry remained after editor safe-save reload")
+	}
+}
+
+func waitForPACContains(t *testing.T, proxyAddr, needle string, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(proxyAddr + "/proxy.pac")
+		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if contains(string(body), needle) {
+				return true
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// saveLikeEditor writes content to a sibling temp file, fsyncs it, and renames
+// it over path — the canonical "safe save" sequence that vim, emacs, VS Code,
+// and most modern editors use. This is distinct from os.WriteFile (in-place
+// truncate+write) and exercises a different fsnotify event path on macOS.
+func saveLikeEditor(t *testing.T, path, content string) {
+	t.Helper()
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		t.Fatalf("create temp: %v", err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op on success
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		t.Fatalf("write temp: %v", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		t.Fatalf("fsync temp: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("close temp: %v", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		t.Fatalf("rename temp→%s: %v", path, err)
 	}
 }
 

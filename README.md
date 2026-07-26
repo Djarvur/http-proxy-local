@@ -108,6 +108,11 @@ the next `/proxy.pac` fetch reflects the new rules.** No restart needed.
 - Changes to `listen` (the bind address) require a restart — the proxy
   logs a `restart required` warning when this happens, since you almost
   certainly want to know your listen address moved.
+- **Editor safe-save is supported**: vim, emacs, VS Code, and most modern
+  editors write to a temp file and atomically rename over the original
+  (rather than truncating + writing in place). The watcher follows the
+  rename and reloads from the new file. Tested in
+  `TestRuntime_HotReload_EditorSafeSave`.
 
 ### How quickly does the browser pick up the change?
 
