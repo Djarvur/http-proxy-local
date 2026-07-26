@@ -61,6 +61,16 @@ func servePAC(pacPtr *atomic.Pointer[[]byte]) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", contentTypePAC)
+		// macOS does NOT re-fetch the PAC on a fixed timer — it honors HTTP
+		// cache headers. With no Cache-Control, the system heuristically
+		// caches for up to ~2 hours, which would defeat our hot-reload
+		// contract (config edits must reach the browser promptly). Force
+		// revalidation on every fetch. The cost is negligible: the PAC is
+		// ~190KB and the request is to localhost.
+		w.Header().Set("Cache-Control", "no-cache")
+		// Pragma is the HTTP/1.0 equivalent; harmless on 1.1, helps older
+		// or quirky clients.
+		w.Header().Set("Pragma", "no-cache")
 		_, _ = w.Write(*pac)
 	}
 }

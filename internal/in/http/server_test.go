@@ -64,6 +64,28 @@ func TestServePAC_StatusAndContentType(t *testing.T) {
 	}
 }
 
+// TestServePAC_DisablesCaching locks in the no-cache behavior. macOS does
+// not re-fetch the PAC on a fixed timer — it honors HTTP cache headers, and
+// with no Cache-Control the system heuristically caches for up to ~2 hours.
+// For a hot-reloading PAC that's unacceptable: config edits would take that
+// long to reach the browser. We force revalidation on every fetch.
+func TestServePAC_DisablesCaching(t *testing.T) {
+	t.Parallel()
+	pac := loadPAC(t, "var PAC=1;\n")
+	h := httpserver.New(nil, pac)
+
+	req := httptest.NewRequest(http.MethodGet, httpserver.PACPath, nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("Cache-Control = %q, want %q (PAC must not be cached; hot-reload depends on this)", got, "no-cache")
+	}
+	if got := rec.Header().Get("Pragma"); got != "no-cache" {
+		t.Errorf("Pragma = %q, want %q (legacy HTTP/1.0 cache busting)", got, "no-cache")
+	}
+}
+
 func TestServePAC_ReflectsSwappedSnapshot(t *testing.T) {
 	t.Parallel()
 	pac := loadPAC(t, "old")

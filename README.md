@@ -109,6 +109,23 @@ the next `/proxy.pac` fetch reflects the new rules.** No restart needed.
   logs a `restart required` warning when this happens, since you almost
   certainly want to know your listen address moved.
 
+### How quickly does the browser pick up the change?
+
+End-to-end latency is ~400ms from config save to PAC swap on disk. **The
+browser sees the change on its next PAC fetch** — macOS does not re-read
+the PAC on a fixed timer; it honors HTTP cache headers, and we serve the
+PAC with `Cache-Control: no-cache` so the system revalidates on every
+request. Without that header, browsers heuristically cache the PAC for
+up to ~2 hours, which would silently defeat hot-reload.
+
+If you ever edit the config and the browser doesn't pick it up within a
+few seconds, toggle **System Settings → Network → Proxies → Automatic
+Proxy Configuration** off and on, or run:
+
+```bash
+networksetup -setautoproxyurl "Wi-Fi" "http://127.0.0.1:8080/proxy.pac"
+```
+
 ## RU geo data
 
 The binary is self-contained: it fetches the RIPE delegation list from

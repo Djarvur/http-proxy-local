@@ -221,6 +221,16 @@ IPv6 is deferred to a future change. The PAC's `ipToInt` rejects IPv6
 strings (returns -1, never matches), so IPv6-only hosts fall through to
 the default `PROXY` rule.
 
+### Cache headers
+
+The PAC response carries `Cache-Control: no-cache` and `Pragma: no-cache`.
+macOS does not re-read the PAC on a fixed timer — it honors HTTP cache
+headers, and without `Cache-Control` the system heuristically caches for
+up to ~2 hours. That would silently defeat the hot-reload contract
+(config edits must reach the browser promptly). Forcing revalidation on
+every fetch keeps end-to-end latency bounded by the browser's request
+frequency, not by an opaque cache TTL.
+
 ## CI
 
 Two workflows (`.github/workflows/`):
