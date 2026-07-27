@@ -348,3 +348,144 @@ func drainSignals(ch chan struct{}) {
 		}
 	}
 }
+
+// TestReloadOrchestrator_Socks5ListenChangeLogsRestartRequired proves a
+// change to socks5.listen emits a restart-required error and does NOT attempt
+// to rebind the SOCKS5 listener mid-flight. Covers all three transitions
+// required by the spec: address change, block added, block removed.
+func TestReloadOrchestrator_Socks5ListenChangeLogsRestartRequired(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		initial    port.SOCKS5
+		newConfig  string
+		wantMention string // substring the restart-required error must contain
+	}{
+		{
+			name:       "address changed",
+			initial:    port.SOCKS5{Listen: "127.0.0.1:1080"},
+			newConfig:  "socks5:\n  listen: 127.0.0.1:1085\n",
+			wantMention: "socks5.listen",
+		},
+		{
+			name:       "block added (was disabled, now enabled)",
+			initial:    port.SOCKS5{Listen: ""}, // disabled
+			newConfig:  "socks5:\n  listen: 127.0.0.1:1080\n",
+			wantMention: "socks5.listen",
+		},
+		{
+			name:       "block removed (was enabled, now disabled)",
+			initial:    port.SOCKS5{Listen: "127.0.0.1:1080"},
+			newConfig:  "", // no socks5 block at all
+			wantMention: "socks5.listen",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgPtr, rangesPtr, pacPtr, regen := freshSnapshots(t)
+			initial := port.Config{
+				Listen:   "127.0.0.1:8080",
+				Upstream: port.Upstream{URL: "http://up:3128"},
+				Geo:      port.Geo{RefreshInterval: 24 * time.Hour, RetryInterval: 5 * time.Minute},
+				SOCKS5:   tt.initial,
+			}
+			cfgPtr.Store(&initial)
+			stop := app.RunPACRegenerator(regen, cfgPtr, rangesPtr, pacPtr)
+			t.Cleanup(stop)
+
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.yaml")
+			// Always include the stable base fields; layer the per-case
+			// socks5 block on top.
+			content := `
+listen: 127.0.0.1:8080
+upstream:
+  url: http://up:3128
+geo:
+  refresh_interval: 24h
+  retry_interval: 5m
+` + tt.newConfig
+			writeFile(t, cfgPath, content)
+
+			loader := yamlconfig.NewLoader()
+			errs := make(chan error, 4)
+			orch := app.NewReloadOrchestrator(loader, cfgPath, cfgPtr, regen, errs)
+
+			orch.Reload()
+
+			select {
+			case e := <-errs:
+				if e == nil {
+					t.Fatal("nil error for socks5.listen change")
+				}
+				if !contains(e.Error(), "restart") {
+					t.Errorf("socks5.listen change error didn't mention restart: %v", e)
+				}
+				if !contains(e.Error(), tt.wantMention) {
+					t.Errorf("socks5.listen change error didn't name the field (%q): %v", tt.wantMention, e)
+				}
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("expected restart-required error for socks5.listen change")
+			}
+		})
+	}
+}
+
+// TestReloadOrchestrator_Socks5ListenUnchangedNoError proves that when
+// socks5.listen is the same before and after a reload, no restart-required
+// error is emitted for it. (Guards against false positives — the orchestrator
+// must only complain on actual change.)
+func TestReloadOrchestrator_Socks5ListenUnchangedNoError(t *testing.T) {
+	t.Parallel()
+
+	cfgPtr, rangesPtr, pacPtr, regen := freshSnapshots(t)
+	initial := port.Config{
+		Listen:   "127.0.0.1:8080",
+		Upstream: port.Upstream{URL: "http://up:3128"},
+		Geo:      port.Geo{RefreshInterval: 24 * time.Hour, RetryInterval: 5 * time.Minute},
+		SOCKS5:   port.SOCKS5{Listen: "127.0.0.1:1080"},
+	}
+	cfgPtr.Store(&initial)
+	stop := app.RunPACRegenerator(regen, cfgPtr, rangesPtr, pacPtr)
+	t.Cleanup(stop)
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	// Identical socks5.listen before and after — only the (PAC-irrelevant)
+	// upstream URL changes, which should NOT trigger a socks5 restart error.
+	writeFile(t, cfgPath, `
+listen: 127.0.0.1:8080
+upstream:
+  url: http://up:3128
+geo:
+  refresh_interval: 24h
+  retry_interval: 5m
+socks5:
+  listen: 127.0.0.1:1080
+`)
+
+	loader := yamlconfig.NewLoader()
+	errs := make(chan error, 4)
+	orch := app.NewReloadOrchestrator(loader, cfgPath, cfgPtr, regen, errs)
+
+	orch.Reload()
+
+	// No socks5-listen-related error should arrive. We can't assert "channel
+	// empty" definitively (other unrelated errors might land), so we drain
+	// whatever's there and assert none of them mention socks5.listen.
+	timer := time.After(200 * time.Millisecond)
+	for {
+		select {
+		case e := <-errs:
+			if e != nil && contains(e.Error(), "socks5.listen") {
+				t.Errorf("unexpected socks5.listen restart error for unchanged field: %v", e)
+			}
+		case <-timer:
+			return
+		}
+	}
+}

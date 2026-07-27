@@ -139,6 +139,15 @@ func (o *ReloadOrchestrator) Reload() {
 		return
 	}
 
+	// If socks5.listen changed (including the block being added or removed
+	// entirely), warn that a restart is required — the SOCKS5 listener is
+	// not rebound, started, or stopped mid-flight. The config IS swapped so
+	// downstream reads stay consistent; the error tells the operator the
+	// listener won't reflect the change until restart.
+	if old != nil && old.SOCKS5.Listen != newCfg.SOCKS5.Listen {
+		o.report(restartRequiredError{Field: "socks5.listen", Old: old.SOCKS5.Listen, New: newCfg.SOCKS5.Listen})
+	}
+
 	// Signal PAC regen if any PAC-affecting field changed.
 	if old == nil || pacAffectingChanged(old, &newCfg) {
 		o.signalRegen()

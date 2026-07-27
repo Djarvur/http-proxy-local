@@ -63,17 +63,17 @@ phase, because there is no new behavior to express in a failing test.
 
 ## 8. Reload orchestrator — `socks5.listen` restart-required downstream effect
 
-- [ ] 8.1 Write/extend `internal/app/orchestrator_test.go` test asserting: a reload that changes `socks5.listen` while running logs a restart-required error and does NOT rebind. Cover all three transitions: address changed, `socks5` block added (was absent → now present), `socks5` block removed (was present → now absent)
-- [ ] 8.2 Extend `ReloadOrchestrator.Reload` to detect `socks5.listen` changes alongside the existing `listen` check and emit a restart-required log of the same shape (spec scenario: "socks5.listen change logs restart-required error")
-- [ ] 8.3 Run `go test ./internal/app/ -run Orchestrator`; green
-- [ ] 8.4 Run `golangci-lint run`; zero findings
+- [x] 8.1 Write/extend `internal/app/orchestrator_test.go` test asserting: a reload that changes `socks5.listen` while running logs a restart-required error and does NOT rebind. Cover all three transitions: address changed, `socks5` block added (was absent → now present), `socks5` block removed (was present → now absent)
+- [x] 8.2 Extend `ReloadOrchestrator.Reload` to detect `socks5.listen` changes alongside the existing `listen` check and emit a restart-required log of the same shape (spec scenario: "socks5.listen change logs restart-required error")
+- [x] 8.3 Run `go test ./internal/app/ -run Orchestrator`; green
+- [x] 8.4 Run `golangci-lint run`; zero findings
 
 ## 9. Wire SOCKS5 listener into composition root
 
-- [ ] 9.1 Extend `cmd/http-proxy-local/wire_test.go` with tests asserting: (a) when `initial.SOCKS5.Listen != ""`, both HTTP and SOCKS5 listeners bind; a SOCKS5 client can CONNECT through the chain; (b) cancelling the context shuts down both `Serve` goroutines within 10s; (c) when `initial.SOCKS5.Listen == ""`, no SOCKS5 port binds and behavior is byte-for-byte identical to a build without this feature
-- [ ] 9.2 Extend `wire.go` `Run`: after the HTTP listener block, when `initial.SOCKS5.Listen != ""`, bind a SOCKS5 listener and launch `socks5.Serve` in a goroutine; coordinate shutdown with the HTTP `Serve` goroutine and `ctx` via select (D2) — either listener failing unexpectedly tears down the other
-- [ ] 9.3 Run `go test ./cmd/http-proxy-local/...` (includes existing `e2e_test.go`); green
-- [ ] 9.4 Run `golangci-lint run`; zero findings
+- [x] 9.1 Extend `cmd/http-proxy-local/wire_test.go` with tests asserting: (a) when `initial.SOCKS5.Listen != ""`, both HTTP and SOCKS5 listeners bind; a SOCKS5 client can CONNECT through the chain; (b) cancelling the context shuts down both `Serve` goroutines within 10s; (c) when `initial.SOCKS5.Listen == ""`, no SOCKS5 port binds and behavior is byte-for-byte identical to a build without this feature
+- [x] 9.2 Extend `wire.go` `Run`: after the HTTP listener block, when `initial.SOCKS5.Listen != ""`, bind a SOCKS5 listener and launch `socks5.Serve` in a goroutine; coordinate shutdown with the HTTP `Serve` goroutine and `ctx` via select (D2) — either listener failing unexpectedly tears down the other
+- [x] 9.3 Run `go test ./cmd/http-proxy-local/...` (includes existing `e2e_test.go`); green
+- [x] 9.4 Run `golangci-lint run`; zero findings
 
 ## 10. Docs and config example
 

@@ -156,23 +156,27 @@ func Run(ctx context.Context, configPath string) error {
 		ReadHeaderTimeout: 10 * time.Second, // mitigates Slowloris (gosec G112)
 	}
 
-	serverDone := make(chan error, 1)
-	go func() { serverDone <- srv.Serve(ln) }()
-
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-		<-serverDone
-		_ = errsDone // see comment above
-		return nil
-	case err := <-serverDone:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
+	// SOCKS5 listener: bind only when configured (design D3 — empty
+	// socks5.listen means disabled, full backward compatibility). A bind
+	// failure here is fatal, same posture as the HTTP listener.
+	var socksLn net.Listener
+	if initial.SOCKS5.Listen != "" {
+		socksLn, err = net.Listen("tcp", initial.SOCKS5.Listen)
+		if err != nil {
+			_ = ln.Close()
+			return fmt.Errorf("listen socks5 on %s: %w", initial.SOCKS5.Listen, err)
 		}
-		return nil
 	}
+
+	// serveBoth blocks until ctx is cancelled OR either listener exits. On
+	// exit it shuts both down (design D2: either failing tears down the
+	// other — a half-broken process is worse than a clean exit).
+	serveErr := serveBoth(ctx, srv, ln, socksLn, cfgPtr)
+	_ = errsDone // see comment above about errs being left open
+	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+		return serveErr
+	}
+	return nil
 }
 
 // waitForFirstPAC polls pacPtr until it's non-nil or ctx is done.
