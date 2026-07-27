@@ -84,8 +84,8 @@ phase, because there is no new behavior to express in a failing test.
 
 ## 11. Final verification gate
 
-- [ ] 11.1 Run `golangci-lint run` from repo root against the existing `.golangci.yml`; zero findings required (the strict config is already in place per engineering-conventions spec)
-- [ ] 11.2 Run `go test -race ./...`; all pass, race detector clean
-- [ ] 11.3 Verify the three-commit structure: commit 1 (extract `cascade/`) compiles and passes tests alone; commits 1+2 (extract + SOCKS5 package + config field) compile and pass tests alone; commits 1+2+3 (full wire-in) is the final state. Each intermediate commit is independently green.
+- [x] 11.1 Run `golangci-lint run` from repo root against the existing `.golangci.yml`; zero findings required (the strict config is already in place per engineering-conventions spec)
+- [x] 11.2 Run `go test -race ./...`; all pass, race detector clean
+- [x] 11.3 Verify the three-commit structure: commit 1 (extract `cascade/`) compiles and passes tests alone; commits 1+2 (extract + SOCKS5 package + config field) compile and pass tests alone; commits 1+2+3 (full wire-in) is the final state. Each intermediate commit is independently green.
 - [ ] 11.4 Optional manual smoke test: with `$ZCODE_HTTP_PROXY` set, run `go test -tags realproxy ./...` to exercise the real HTTPS-CONNECT cascade end-to-end
 - [ ] 11.5 Empirical Telegram verification (deferred from proposal): point a real Telegram client at `socks5://127.0.0.1:1080`, confirm messages/media/channels work, and document whether voice/video calls succeed via TCP fallback. This is the real-world check the design's Risk section flagged — it is not a code task but an acceptance task; record the outcome in the change's archive notes.
