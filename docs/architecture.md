@@ -61,26 +61,51 @@ blacklist wins → DIRECT.
 ```
 cmd/http-proxy-local/          package main
 ├── main.go                    flags + signal handling, calls Run
-└── wire.go                    composition root: builds all adapters, launches goroutines
+├── wire.go                    composition root: builds all adapters, launches goroutines
+└── serve.go                   serveBoth: coordinates HTTP + SOCKS5 listener shutdown
 
 internal/
 ├── port/                      boundary types (no logic, no I/O)
-│   ├── types.go               Config, Upstream, Geo, Routing, Range, RURanges, PACInput, errors
+│   ├── types.go               Config (incl. SOCKS5), Upstream, Geo, Routing, Range, RURanges, PACInput, errors
 │   └── port.go                GeoSource, Cache, Clock, ConfigLoader interfaces
 ├── app/                       pure logic + orchestration
 │   ├── pac.go                 RenderPAC — pure function, no I/O
 │   ├── ranges.go              ParseRIPELine, MergeRanges, ParseAndMerge — pure
-│   ├── runtime.go             RunPACRegenerator, ReloadOrchestrator
+│   ├── runtime.go             RunPACRegenerator, ReloadOrchestrator (incl. socks5.listen restart-required)
 │   └── geofetcher.go          GeoFetcher — the dual-interval state machine
-├── in/http/                   inbound HTTP adapter
-│   ├── server.go              /proxy.pac handler + forwarder + CONNECT + basic auth
-│   └── helpers.go             tlsDial, base64 helpers
+├── in/                        inbound adapters (two protocols, shared upstream cascade)
+│   ├── http/                  HTTP/PAC adapter
+│   │   └── server.go          /proxy.pac handler + forwarder + CONNECT + basic auth
+│   ├── socks5/                SOCKS5 (RFC 1928) adapter — CONNECT-only, no auth, no routing
+│   │   ├── doc.go             package contract
+│   │   ├── negotiate.go       method negotiation (only 0x00 No-Auth accepted)
+│   │   ├── request.go         request parsing (IPv4/Domain/IPv6 ATYPs)
+│   │   ├── reply.go           reply writing (always BND.ADDR 0.0.0.0:0)
+│   │   └── serve.go           Accept loop, handshake deadline, cascade.Dial + Tunnel
+│   └── cascade/               SHARED upstream-cascade layer (dialUpstream, tunnel, bufferedConn)
+│       └── cascade.go         Dial(u, target) + Tunnel(a, b) — used by BOTH inbound adapters
 └── out/                       outbound adapters (implement port.* interfaces)
     ├── fscache/               atomic disk cache (temp-then-rename)
     ├── fsnotify/              debounced config watcher
     ├── ripe/                  HTTPS fetcher for the RIPE delegation list
-    └── yamlconfig/            parse + validate config.yaml
+    └── yamlconfig/            parse + validate config.yaml (incl. socks5.listen)
 ```
+
+### Two inbound adapters, one upstream cascade
+
+The proxy has two inbound adapters — HTTP/PAC (the original, for browsers)
+and SOCKS5 (added for clients like Telegram that can't use HTTP proxy). Both
+share a single upstream cascade (`internal/in/cascade/`): the same
+`Dial(u, target)` + `Tunnel(a, b)` logic, originally written for the HTTP
+listener's CONNECT handler, was extracted so the subtle tunneling,
+half-close, and buffered-bytes-after-read behaviors live in exactly one
+place. See the `add-socks5-listener` change archive for the design decisions
+(SOCKS5 over MTProto, CONNECT-only over UDP ASSOCIATE, no routing layer,
+stdlib hand-roll over go-socks5, manual coordination over sourcegraph/conc).
+
+The SOCKS5 adapter is **opt-in**: it only starts when `socks5.listen` is
+non-empty (design decision D3 — no activating default port, full backward
+compatibility for operators who don't configure it).
 
 Key invariants:
 

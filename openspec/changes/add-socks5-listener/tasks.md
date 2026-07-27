@@ -77,10 +77,10 @@ phase, because there is no new behavior to express in a failing test.
 
 ## 10. Docs and config example
 
-- [ ] 10.1 Add a documented `socks5:` block to `config.example.yaml` with the recommended `127.0.0.1:1080` value, the "empty = disabled" rule, the "no activating default port" rule, and the localhost-only posture note
-- [ ] 10.2 Add a "Using the SOCKS5 listener with Telegram" section to `README.md` covering: where to point the Telegram client (SOCKS5, 127.0.0.1:1080, no auth), what works (messages, media, channels), what does not (P2P voice/video over UDP — TCP fallback expected), and the rationale (why not MTProto)
-- [ ] 10.3 Add a paragraph to `docs/architecture.md` noting the second inbound adapter and the shared `cascade/` package; reference design D1 and the three-commit migration
-- [ ] 10.4 Update any capability index or README routing-precedence table to note that SOCKS5 traffic is exempt from PAC/geo routing (D7)
+- [x] 10.1 Add a documented `socks5:` block to `config.example.yaml` with the recommended `127.0.0.1:1080` value, the "empty = disabled" rule, the "no activating default port" rule, and the localhost-only posture note
+- [x] 10.2 Add a "Using the SOCKS5 listener with Telegram" section to `README.md` covering: where to point the Telegram client (SOCKS5, 127.0.0.1:1080, no auth), what works (messages, media, channels), what does not (P2P voice/video over UDP — TCP fallback expected), and the rationale (why not MTProto)
+- [x] 10.3 Add a paragraph to `docs/architecture.md` noting the second inbound adapter and the shared `cascade/` package; reference design D1 and the three-commit migration
+- [x] 10.4 Update any capability index or README routing-precedence table to note that SOCKS5 traffic is exempt from PAC/geo routing (D7)
 
 ## 11. Final verification gate
 

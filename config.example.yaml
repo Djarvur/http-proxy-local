@@ -63,8 +63,8 @@ routing:
 # response, exposed as the Cache-Control header.
 pac:
   # Cache TTL in seconds for the served PAC, emitted as
-  # `Cache-Control: max-age=N, must-revalidate`. macOS does not re-read
-  # the PAC on a fixed timer — it honors this header — so the value
+  # `Cache-Control: max-age=N, must-revalidate`. macOS does not re-read the
+  # PAC on a fixed timer — it honors this header — so the value
   # bounds how quickly hot-reloaded config reaches the browser.
   #
   # - omitted       → default 15s (good balance: short enough that edits
@@ -76,3 +76,31 @@ pac:
   # - N > 0         → cache for N seconds
   # Negative values are rejected by the validator.
   cache_seconds: 15
+
+# Optional SOCKS5 inbound listener. Useful for clients that speak SOCKS5
+# but not HTTP proxy — most notably the Telegram desktop/mobile client,
+# which cannot use an HTTP/HTTPS proxy. Traffic entering here is tunneled
+# through the SAME upstream cascade as browser traffic, so it is
+# indistinguishable to DPI.
+#
+# The listener is OPT-IN: it only starts when `socks5.listen` is non-empty.
+# There is NO activating default port — you MUST write a value (or any
+# non-empty value) here to enable it. Omit the block entirely, or leave
+# `listen` empty, and the binary behaves exactly as before (full backward
+# compatibility).
+#
+# Only the CONNECT command (TCP) is supported. BIND and UDP ASSOCIATE are
+# refused — the upstream cascade is TCP-only, so UDP has no transport
+# through it. Telegram voice/video calls fall back to TCP relay (degraded
+# quality but functional); messages, media, and channels work normally.
+#
+# No client authentication: only the "No Authentication Required" SOCKS5
+# method (0x00) is accepted. This matches the localhost-only posture of
+# the HTTP listener; do NOT bind to wildcard (0.0.0.0) without understanding
+# you'd be running an open proxy.
+#
+# Hot-reload: changing `socks5.listen` (or adding/removing the block)
+# logs a restart-required error — the listener is not rebound, started,
+# or stopped mid-flight. Same posture as the HTTP `listen` field.
+# socks5:
+#   listen: 127.0.0.1:1080

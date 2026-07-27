@@ -98,6 +98,55 @@ To verify, visit a RU site (e.g. `https://ya.ru`) — it should load normally
 via direct connection. A non-RU site (e.g. `https://example.com`) routes
 through your configured upstream.
 
+## Using the SOCKS5 listener (e.g. for Telegram)
+
+Some clients — most notably the **Telegram** desktop and mobile apps — cannot
+use an HTTP/HTTPS proxy and only speak SOCKS5 (or MTProto, which this proxy
+does not implement). For those, enable the optional SOCKS5 listener.
+
+The SOCKS5 listener is **opt-in**. It only starts when `socks5.listen` is
+non-empty in your config — there is no default port. Add the block and
+restart:
+
+```yaml
+socks5:
+  listen: 127.0.0.1:1080
+```
+
+Then point the client at it:
+
+- **Telegram desktop**: Settings → Advanced → Connection type → Use custom
+  proxy → Add proxy → SOCKS5, host `127.0.0.1`, port `1080`, no auth.
+- **Telegram Android/iOS**: Settings → Data and Storage → Proxy → Add
+  Proxy → SOCKS5, same host/port.
+
+Traffic entering the SOCKS5 listener is tunneled through the **same upstream
+cascade** as browser traffic, so to DPI it looks identical to your other
+proxied traffic. No PAC, RU-geo, or whitelist/blacklist rules are applied to
+SOCKS5 connections — the client decides its own destinations (Telegram picks
+its DCs), and the proxy just forwards.
+
+### What works, what doesn't
+
+| Feature | Status |
+|---|---|
+| Messages, media, channels | ✅ Works (TCP) |
+| Voice/video calls | ⚠️ Works via TCP relay (Telegram falls back when UDP is unavailable — degraded quality, higher latency) |
+| P2P voice/video (direct UDP) | ❌ Not supported — the upstream cascade is TCP-only (`HTTP CONNECT`), so UDP has no transport through it |
+
+If you need true UDP voice/video, that's an **upstream infrastructure**
+change (e.g. a WireGuard tunnel or SOCKS5-upstream-with-UDP-support to your
+server), not something this local proxy can provide — the limitation is the
+channel to the upstream, not the local listener.
+
+### Why not MTProto?
+
+MTProto is also TCP-only (no help for UDP), its obfuscation is pointless
+inside a loopback + TLS-upstream channel (DPI never sees the localhost hop),
+and it cannot be cascaded through an HTTP-CONNECT upstream. SOCKS5
+CONNECT-only reuses the existing cascade directly. See `openspec/changes/
+add-socks5-listener/design.md` for the full alternatives analysis.
+
 ## Hot reload
 
 The config file is watched with fsnotify. **Edit `config.yaml`, save, and
