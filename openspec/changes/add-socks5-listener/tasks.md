@@ -11,55 +11,55 @@ phase, because there is no new behavior to express in a failing test.
 
 ## 1. Extract upstream cascade into `internal/in/cascade/` (pure refactor)
 
-- [ ] 1.1 Move `dialUpstream`, `dialProxy`, `tlsDial`, `tunnel`, and `bufferedConn` out of `internal/in/http/` (server.go + helpers.go) into a new `internal/in/cascade/` package
-- [ ] 1.2 Expose the entry point as `cascade.Dial(u port.Upstream, target string) (net.Conn, error)` and the tunnel helper as `cascade.Tunnel(a, b net.Conn)`; keep `bufferedConn` unexported inside the package
-- [ ] 1.3 Update `internal/in/http/server.go` (`handleConnect`) to call `cascade.Dial` + `cascade.Tunnel` instead of the now-moved local symbols
-- [ ] 1.4 Run `go test ./internal/in/http/...` and `go test -tags realproxy ./internal/in/http/...` (if `$ZCODE_HTTP_PROXY` set) — all existing tests MUST stay green; this is the regression guard for the extraction
-- [ ] 1.5 Run `golangci-lint run`; zero findings required
-- [ ] 1.6 Commit as a pure refactor (single commit; no behavior change; reviewable in isolation)
+- [x] 1.1 Move `dialUpstream`, `dialProxy`, `tlsDial`, `tunnel`, and `bufferedConn` out of `internal/in/http/` (server.go + helpers.go) into a new `internal/in/cascade/` package
+- [x] 1.2 Expose the entry point as `cascade.Dial(u port.Upstream, target string) (net.Conn, error)` and the tunnel helper as `cascade.Tunnel(a, b net.Conn)`; keep `bufferedConn` unexported inside the package
+- [x] 1.3 Update `internal/in/http/server.go` (`handleConnect`) to call `cascade.Dial` + `cascade.Tunnel` instead of the now-moved local symbols
+- [x] 1.4 Run `go test ./internal/in/http/...` and `go test -tags realproxy ./internal/in/http/...` (if `$ZCODE_HTTP_PROXY` set) — all existing tests MUST stay green; this is the regression guard for the extraction
+- [x] 1.5 Run `golangci-lint run`; zero findings required
+- [x] 1.6 Commit as a pure refactor (single commit; no behavior change; reviewable in isolation)
 
 ## 2. Add `SOCKS5` struct to `port.Config`
 
-- [ ] 2.1 Write `internal/port/types_test.go` test asserting `Config` round-trips a `SOCKS5{Listen: "127.0.0.1:1080"}` field through YAML marshal/unmarshal and that an absent block leaves `Listen == ""`
-- [ ] 2.2 Add `SOCKS5 struct { Listen string \`yaml:"listen"\` }` to `port.Config` and a `SOCKS5 SOCKS5 \`yaml:"socks5"\`` field; no `applyDefaults` change (D3: empty means disabled, no activating default port)
-- [ ] 2.3 Run `go test ./internal/port/...`; green
-- [ ] 2.4 Run `golangci-lint run`; zero findings
+- [x] 2.1 Write `internal/port/types_test.go` test asserting `Config` round-trips a `SOCKS5{Listen: "127.0.0.1:1080"}` field through YAML marshal/unmarshal and that an absent block leaves `Listen == ""`
+- [x] 2.2 Add `SOCKS5 struct { Listen string \`yaml:"listen"\` }` to `port.Config` and a `SOCKS5 SOCKS5 \`yaml:"socks5"\`` field; no `applyDefaults` change (D3: empty means disabled, no activating default port)
+- [x] 2.3 Run `go test ./internal/port/...`; green
+- [x] 2.4 Run `golangci-lint run`; zero findings
 
 ## 3. Validate `socks5.listen` in config loader
 
-- [ ] 3.1 Write `internal/out/yamlconfig/loader_test.go` test asserting a non-empty `socks5.listen` that does not parse as `host:port` fails validation with an error wrapping `port.ErrValidation` and naming the `socks5.listen` field
-- [ ] 3.2 Write loader_test asserting empty/absent `socks5.listen` passes validation (the disabled state is valid)
-- [ ] 3.3 Implement validation in `yamlconfig/loader.go` `Validate`: when `socks5.listen` is non-empty, `net.SplitHostPort` MUST succeed; mirror the existing `listen` field check
-- [ ] 3.4 Run `go test ./internal/out/yamlconfig/...`; green
-- [ ] 3.5 Run `golangci-lint run`; zero findings
+- [x] 3.1 Write `internal/out/yamlconfig/loader_test.go` test asserting a non-empty `socks5.listen` that does not parse as `host:port` fails validation with an error wrapping `port.ErrValidation` and naming the `socks5.listen` field
+- [x] 3.2 Write loader_test asserting empty/absent `socks5.listen` passes validation (the disabled state is valid)
+- [x] 3.3 Implement validation in `yamlconfig/loader.go` `Validate`: when `socks5.listen` is non-empty, `net.SplitHostPort` MUST succeed; mirror the existing `listen` field check
+- [x] 3.4 Run `go test ./internal/out/yamlconfig/...`; green
+- [x] 3.5 Run `golangci-lint run`; zero findings
 
 ## 4. SOCKS5 pure framing — method negotiation
 
-- [ ] 4.1 Write `internal/in/socks5/negotiate_test.go` with table-driven tests over `bytes.Buffer` pairs: valid greeting offering `0x00` → writes method byte `0x00`; greeting without `0x00` → writes `0xFF`; first byte not `0x05` → returns error without writing; truncated greeting (fewer bytes than declared NMETHODS, or <2 total) → returns error
-- [ ] 4.2 Implement `negotiateMethod(r io.Reader, w io.Writer) error` per design D5/D6 — pure function, no `net` dependency
-- [ ] 4.3 Run `go test ./internal/in/socks5/ -run Negotiate`; green
-- [ ] 4.4 Run `golangci-lint run`; zero findings
+- [x] 4.1 Write `internal/in/socks5/negotiate_test.go` with table-driven tests over `bytes.Buffer` pairs: valid greeting offering `0x00` → writes method byte `0x00`; greeting without `0x00` → writes `0xFF`; first byte not `0x05` → returns error without writing; truncated greeting (fewer bytes than declared NMETHODS, or <2 total) → returns error
+- [x] 4.2 Implement `negotiateMethod(r io.Reader, w io.Writer) error` per design D5/D6 — pure function, no `net` dependency
+- [x] 4.3 Run `go test ./internal/in/socks5/ -run Negotiate`; green
+- [x] 4.4 Run `golangci-lint run`; zero findings
 
 ## 5. SOCKS5 pure framing — request parsing
 
-- [ ] 5.1 Write `internal/in/socks5/request_test.go` with table-driven tests: CONNECT+IPv4 → `(0x01, "1.2.3.4:443", nil)`; CONNECT+domain → `(0x01, "example.com:443", nil)`; CONNECT+IPv6 → `(0x01, "[2001:db8::1]:443", nil)`; BIND request → returns cmd `0x02` (caller decides refusal); truncated request → error; malformed ATYP → error
-- [ ] 5.2 Implement `readRequest(r io.Reader) (cmd byte, host string, port uint16, err error)` per D5/D6 — IPv6 hosts formatted as `[addr]:port` per RFC 3986; no DNS resolution (the upstream CONNECT resolves)
-- [ ] 5.3 Run `go test ./internal/in/socks5/ -run ReadRequest`; green
-- [ ] 5.4 Run `golangci-lint run`; zero findings
+- [x] 5.1 Write `internal/in/socks5/request_test.go` with table-driven tests: CONNECT+IPv4 → `(0x01, "1.2.3.4:443", nil)`; CONNECT+domain → `(0x01, "example.com:443", nil)`; CONNECT+IPv6 → `(0x01, "[2001:db8::1]:443", nil)`; BIND request → returns cmd `0x02` (caller decides refusal); truncated request → error; malformed ATYP → error
+- [x] 5.2 Implement `readRequest(r io.Reader) (cmd byte, host string, port uint16, err error)` per D5/D6 — IPv6 hosts formatted as `[addr]:port` per RFC 3986; no DNS resolution (the upstream CONNECT resolves)
+- [x] 5.3 Run `go test ./internal/in/socks5/ -run ReadRequest`; green
+- [x] 5.4 Run `golangci-lint run`; zero findings
 
 ## 6. SOCKS5 pure framing — reply writing
 
-- [ ] 6.1 Write `internal/in/socks5/reply_test.go` asserting `writeReply(w, 0x00)` produces exactly the 10-byte success reply (VER=5, REP=0, RSV=0, ATYP=1, BND.ADDR=0.0.0.0, BND.PORT=0); `writeReply(w, 0x07)` produces command-not-supported; `writeReply(w, 0x01)` produces general failure
-- [ ] 6.2 Implement `writeReply(w io.Writer, code byte) error` — always emits BND.ADDR `0.0.0.0:0` (D5)
-- [ ] 6.3 Run `go test ./internal/in/socks5/ -run WriteReply`; green
-- [ ] 6.4 Run `golangci-lint run`; zero findings
+- [x] 6.1 Write `internal/in/socks5/reply_test.go` asserting `writeReply(w, 0x00)` produces exactly the 10-byte success reply (VER=5, REP=0, RSV=0, ATYP=1, BND.ADDR=0.0.0.0, BND.PORT=0); `writeReply(w, 0x07)` produces command-not-supported; `writeReply(w, 0x01)` produces general failure
+- [x] 6.2 Implement `writeReply(w io.Writer, code byte) error` — always emits BND.ADDR `0.0.0.0:0` (D5)
+- [x] 6.3 Run `go test ./internal/in/socks5/ -run WriteReply`; green
+- [x] 6.4 Run `golangci-lint run`; zero findings
 
 ## 7. SOCKS5 connection shell — `Serve`
 
-- [ ] 7.1 Write `internal/in/socks5/serve_test.go` using a real `net.Listener` + an in-process fake HTTP upstream (mirroring `internal/in/http/chain_test.go`'s pattern). End-to-end scenarios: (a) CONNECT to a fake host tunnels bytes both ways through the fake upstream; (b) BIND request → shell writes `0x07` and closes; (c) UDP ASSOCIATE → `0x07` and closes; (d) cascade failure (fake upstream rejects CONNECT) → `0x01` reply; (e) client holds handshake open past deadline → connection closed; (f) a request matching the live config's blacklist/whitelist/RU-geo is tunneled anyway (no routing applied)
-- [ ] 7.2 Implement `Serve(ctx context.Context, ln net.Listener, cfgPtr *atomic.Pointer[port.Config])` per D6: Accept loop, per-connection goroutine, set 10s handshake read deadline, call `negotiateMethod` → `readRequest`, dispatch on cmd (CONNECT → proceed; BIND/UDP/unknown → `writeReply(0x07)` + close), call `cascade.Dial(cfg.Upstream, target)` → on success `writeReply(0x00)` + clear deadline + `cascade.Tunnel`; on failure `writeReply(0x01)` + close. Read `cfgPtr.Load().Upstream` per-connection (D4). Exit on `<-ctx.Done()` and close the listener.
-- [ ] 7.3 Run `go test ./internal/in/socks5/ -run Serve`; green
-- [ ] 7.4 Run `golangci-lint run`; zero findings
+- [x] 7.1 Write `internal/in/socks5/serve_test.go` using a real `net.Listener` + an in-process fake HTTP upstream (mirroring `internal/in/http/chain_test.go`'s pattern). End-to-end scenarios: (a) CONNECT to a fake host tunnels bytes both ways through the fake upstream; (b) BIND request → shell writes `0x07` and closes; (c) UDP ASSOCIATE → `0x07` and closes; (d) cascade failure (fake upstream rejects CONNECT) → `0x01` reply; (e) client holds handshake open past deadline → connection closed; (f) a request matching the live config's blacklist/whitelist/RU-geo is tunneled anyway (no routing applied)
+- [x] 7.2 Implement `Serve(ctx context.Context, ln net.Listener, cfgPtr *atomic.Pointer[port.Config])` per D6: Accept loop, per-connection goroutine, set 10s handshake read deadline, call `negotiateMethod` → `readRequest`, dispatch on cmd (CONNECT → proceed; BIND/UDP/unknown → `writeReply(0x07)` + close), call `cascade.Dial(cfg.Upstream, target)` → on success `writeReply(0x00)` + clear deadline + `cascade.Tunnel`; on failure `writeReply(0x01)` + close. Read `cfgPtr.Load().Upstream` per-connection (D4). Exit on `<-ctx.Done()` and close the listener.
+- [x] 7.3 Run `go test ./internal/in/socks5/ -run Serve`; green
+- [x] 7.4 Run `golangci-lint run`; zero findings
 
 ## 8. Reload orchestrator — `socks5.listen` restart-required downstream effect
 

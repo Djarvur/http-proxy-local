@@ -21,6 +21,17 @@ type Config struct {
 	Geo      Geo      `yaml:"geo"`
 	Routing  Routing  `yaml:"routing"`
 	PAC      PAC      `yaml:"pac"`
+	SOCKS5   SOCKS5   `yaml:"socks5"`
+}
+
+// SOCKS5 governs the optional SOCKS5 inbound listener. The listener starts
+// if and only if Listen is non-empty (design D3: there is no activating
+// default port — the operator MUST write a non-empty value to enable).
+// Empty (whether the block is absent or the field is explicitly "") means
+// disabled; the process then behaves identically to a build without the
+// feature.
+type SOCKS5 struct {
+	Listen string `yaml:"listen"`
 }
 
 // Upstream describes the cascaded proxy all non-PAC traffic is forwarded to.

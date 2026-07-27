@@ -1,8 +1,10 @@
 package yamlconfig_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -315,6 +317,50 @@ func TestValidate(t *testing.T) {
 		c.PAC.CacheSeconds = nil
 		if err := l.Validate(c); err != nil {
 			t.Fatalf("nil pac.cache_seconds should be valid (defaults applied later): %v", err)
+		}
+	})
+
+	t.Run("valid socks5.listen accepted", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.SOCKS5.Listen = "127.0.0.1:1080"
+		if err := l.Validate(c); err != nil {
+			t.Fatalf("valid socks5.listen should pass: %v", err)
+		}
+	})
+
+	t.Run("empty socks5.listen accepted as disabled", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.SOCKS5.Listen = "" // absent block OR explicit empty both parse to ""
+		if err := l.Validate(c); err != nil {
+			t.Fatalf("empty socks5.listen (disabled) should be valid: %v", err)
+		}
+	})
+
+	t.Run("malformed socks5.listen rejected", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.SOCKS5.Listen = "not-a-host-port"
+		err := l.Validate(c)
+		if err == nil {
+			t.Fatal("expected error for malformed socks5.listen")
+		}
+		if !errors.Is(err, port.ErrValidation) {
+			t.Errorf("error should wrap port.ErrValidation, got: %v", err)
+		}
+		// The message must name the field so the operator knows which knob to fix.
+		if !strings.Contains(err.Error(), "socks5.listen") {
+			t.Errorf("error should name 'socks5.listen', got: %v", err)
+		}
+	})
+
+	t.Run("socks5.listen missing port rejected", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.SOCKS5.Listen = "127.0.0.1" // host without :port
+		if err := l.Validate(c); err == nil {
+			t.Fatal("expected error for socks5.listen without port")
 		}
 	})
 }

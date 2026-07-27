@@ -1,8 +1,11 @@
 package port_test
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/Djarvur/http-proxy-local/internal/port"
 )
@@ -121,3 +124,69 @@ func TestPAC_EffectiveCacheSeconds(t *testing.T) {
 }
 
 func intPtr(i int) *int { return &i }
+
+// TestSOCKS5_YAMLRoundTrip locks in the Config.SOCKS5 field's YAML behavior:
+// a non-empty socks5.listen survives marshal+unmarshal, and an absent socks5
+// block parses to SOCKS5{Listen: ""} (the disabled state). Per design D3
+// there is no activating default port — empty means disabled, full stop.
+func TestSOCKS5_YAMLRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	t.Run("non-empty listen round-trips", func(t *testing.T) {
+		t.Parallel()
+		in := port.Config{SOCKS5: port.SOCKS5{Listen: "127.0.0.1:1080"}}
+		raw, err := yaml.Marshal(in)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var out port.Config
+		if err := yaml.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if out.SOCKS5.Listen != "127.0.0.1:1080" {
+			t.Errorf("SOCKS5.Listen = %q, want 127.0.0.1:1080", out.SOCKS5.Listen)
+		}
+	})
+
+	t.Run("absent socks5 block leaves Listen empty", func(t *testing.T) {
+		t.Parallel()
+		// Minimal config with no socks5: block at all.
+		const doc = "listen: 127.0.0.1:8080\n"
+		var out port.Config
+		if err := yaml.Unmarshal([]byte(doc), &out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if out.SOCKS5.Listen != "" {
+			t.Errorf("SOCKS5.Listen = %q, want empty (disabled)", out.SOCKS5.Listen)
+		}
+	})
+
+	t.Run("explicit empty socks5.listen leaves Listen empty", func(t *testing.T) {
+		t.Parallel()
+		const doc = "socks5:\n  listen: \"\"\n"
+		var out port.Config
+		if err := yaml.Unmarshal([]byte(doc), &out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if out.SOCKS5.Listen != "" {
+			t.Errorf("SOCKS5.Listen = %q, want empty (operator opt-out)", out.SOCKS5.Listen)
+		}
+	})
+
+	// Sanity: ensure the YAML key is the snake-case `socks5.listen` (not the
+	// Go field name), so the documented config schema matches.
+	t.Run("documented snake-case keys", func(t *testing.T) {
+		t.Parallel()
+		in := port.Config{SOCKS5: port.SOCKS5{Listen: "127.0.0.1:1080"}}
+		raw, err := yaml.Marshal(in)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), "socks5:") {
+			t.Errorf("marshaled YAML missing 'socks5:' key; got:\n%s", raw)
+		}
+		if !strings.Contains(string(raw), "listen:") {
+			t.Errorf("marshaled YAML missing 'listen:' key; got:\n%s", raw)
+		}
+	})
+}

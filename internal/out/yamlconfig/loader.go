@@ -92,6 +92,15 @@ func (Loader) Validate(c port.Config) error {
 		return fmt.Errorf("%w: pac.cache_seconds must be non-negative when set, got %d", port.ErrValidation, *c.PAC.CacheSeconds)
 	}
 
+	// socks5.listen: empty (whether the block is absent or the field is
+	// explicitly "") means disabled and is always valid. When non-empty it
+	// MUST parse as host:port — same rule as the HTTP `listen` field.
+	if c.SOCKS5.Listen != "" {
+		if _, _, err := net.SplitHostPort(c.SOCKS5.Listen); err != nil {
+			return fmt.Errorf("%w: socks5.listen %q is not host:port: %w", port.ErrValidation, c.SOCKS5.Listen, err)
+		}
+	}
+
 	return nil
 }
 
