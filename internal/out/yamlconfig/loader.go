@@ -22,6 +22,9 @@ const (
 	defaultSource   = "https://ftp.ripe.net/pub/stats/ripencc/delegated-ripencc-latest"
 	defaultRefresh  = 24 * time.Hour
 	defaultRetry    = 5 * time.Minute
+	defaultDialTo   = 3 * time.Second
+	defaultDialAtts = 2
+	defaultNegTTL   = 60 * time.Second
 )
 
 // Loader implements port.ConfigLoader. It has no state; the type exists so
@@ -101,6 +104,28 @@ func (Loader) Validate(c port.Config) error {
 		}
 	}
 
+	return validateSmart(c.Smart)
+}
+
+// validateSmart checks the smart listener's fields: Listen mirrors
+// socks5.listen (empty = disabled, else MUST parse as host:port), and the
+// three tuning fields reject negatives (zero is valid — it means "use the
+// default", which applyDefaults fills in).
+func validateSmart(s port.Smart) error {
+	if s.Listen != "" {
+		if _, _, err := net.SplitHostPort(s.Listen); err != nil {
+			return fmt.Errorf("%w: smart.listen %q is not host:port: %w", port.ErrValidation, s.Listen, err)
+		}
+	}
+	if s.DialTimeout < 0 {
+		return fmt.Errorf("%w: smart.dial_timeout must be non-negative when set, got %v", port.ErrValidation, s.DialTimeout)
+	}
+	if s.DialAttempts < 0 {
+		return fmt.Errorf("%w: smart.dial_attempts must be non-negative when set, got %d", port.ErrValidation, s.DialAttempts)
+	}
+	if s.NegativeCacheTTL < 0 {
+		return fmt.Errorf("%w: smart.negative_cache_ttl must be non-negative when set, got %v", port.ErrValidation, s.NegativeCacheTTL)
+	}
 	return nil
 }
 
@@ -126,6 +151,18 @@ func applyDefaults(c *port.Config) {
 	}
 	if c.Geo.RetryInterval == 0 {
 		c.Geo.RetryInterval = defaultRetry
+	}
+	// Smart tuning fields default when zero (Listen is NOT defaulted — empty
+	// means disabled, per design D8). Only the three dial/negcache knobs get
+	// defaults, so a minimal smart config is just `smart: { listen: ... }`.
+	if c.Smart.DialTimeout == 0 {
+		c.Smart.DialTimeout = defaultDialTo
+	}
+	if c.Smart.DialAttempts == 0 {
+		c.Smart.DialAttempts = defaultDialAtts
+	}
+	if c.Smart.NegativeCacheTTL == 0 {
+		c.Smart.NegativeCacheTTL = defaultNegTTL
 	}
 	extractUpstreamCreds(c)
 }

@@ -22,6 +22,7 @@ type Config struct {
 	Routing  Routing  `yaml:"routing"`
 	PAC      PAC      `yaml:"pac"`
 	SOCKS5   SOCKS5   `yaml:"socks5"`
+	Smart    Smart    `yaml:"smart"`
 }
 
 // SOCKS5 governs the optional SOCKS5 inbound listener. The listener starts
@@ -32,6 +33,34 @@ type Config struct {
 // feature.
 type SOCKS5 struct {
 	Listen string `yaml:"listen"`
+}
+
+// Smart governs the optional smart HTTP inbound listener — a second HTTP
+// listener (separate port from `listen`) that applies the PAC-equivalent
+// routing precedence server-side for clients that ignore the system PAC
+// (notably the zcode CLI). The listener starts if and only if Listen is
+// non-empty (design D8: no activating default port, mirroring SOCKS5). Empty
+// means disabled; the process then behaves identically to a build without
+// the feature.
+//
+// The three tuning fields govern the Direct-dial path of the blacklist
+// fallback (the only rule with a fallback). They default when zero — the
+// loader applies the documented defaults (3s / 2 / 60s), so a minimal config
+// is just `smart: { listen: 127.0.0.1:8081 }`. Positive values are honoured
+// as-is; non-positive values are rejected by the validator.
+type Smart struct {
+	Listen string `yaml:"listen"`
+	// DialTimeout bounds each Direct dial attempt. Default 3s. Short enough
+	// that the upstream fallback kicks in promptly when direct is down.
+	DialTimeout time.Duration `yaml:"dial_timeout"`
+	// DialAttempts is the number of Direct attempts before giving up and
+	// falling back. Default 2 — absorbs a single dropped SYN before recording
+	// a negative-cache entry.
+	DialAttempts int `yaml:"dial_attempts"`
+	// NegativeCacheTTL is how long to remember a Direct failure for a given
+	// hostname, so subsequent requests skip the doomed Direct attempt. Default
+	// 60s. Keyed by hostname (host-level unavailability).
+	NegativeCacheTTL time.Duration `yaml:"negative_cache_ttl"`
 }
 
 // Upstream describes the cascaded proxy all non-PAC traffic is forwarded to.

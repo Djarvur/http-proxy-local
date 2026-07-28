@@ -190,3 +190,88 @@ func TestSOCKS5_YAMLRoundTrip(t *testing.T) {
 		}
 	})
 }
+
+// TestSmart_YAMLRoundTrip locks in the Config.Smart field's YAML behavior: a
+// populated smart block survives marshal+unmarshal with all four fields
+// preserved, and an absent smart block parses to the zero value (disabled).
+// Per design D8 there is no activating default port — empty Listen means
+// disabled, full stop. The three tuning fields default when zero (applied by
+// the loader, not by the struct), so their zero value is also a valid "unset".
+func TestSmart_YAMLRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	t.Run("populated block round-trips", func(t *testing.T) {
+		t.Parallel()
+		in := port.Config{Smart: port.Smart{
+			Listen:           "127.0.0.1:8081",
+			DialTimeout:      3 * time.Second,
+			DialAttempts:     2,
+			NegativeCacheTTL: 60 * time.Second,
+		}}
+		raw, err := yaml.Marshal(in)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var out port.Config
+		if err := yaml.Unmarshal(raw, &out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if out.Smart.Listen != "127.0.0.1:8081" {
+			t.Errorf("Smart.Listen = %q, want 127.0.0.1:8081", out.Smart.Listen)
+		}
+		if out.Smart.DialTimeout != 3*time.Second {
+			t.Errorf("Smart.DialTimeout = %v, want 3s", out.Smart.DialTimeout)
+		}
+		if out.Smart.DialAttempts != 2 {
+			t.Errorf("Smart.DialAttempts = %d, want 2", out.Smart.DialAttempts)
+		}
+		if out.Smart.NegativeCacheTTL != 60*time.Second {
+			t.Errorf("Smart.NegativeCacheTTL = %v, want 60s", out.Smart.NegativeCacheTTL)
+		}
+	})
+
+	t.Run("absent smart block leaves all fields zero", func(t *testing.T) {
+		t.Parallel()
+		const doc = "listen: 127.0.0.1:8080\n"
+		var out port.Config
+		if err := yaml.Unmarshal([]byte(doc), &out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if out.Smart.Listen != "" {
+			t.Errorf("Smart.Listen = %q, want empty (disabled)", out.Smart.Listen)
+		}
+		if out.Smart.DialTimeout != 0 {
+			t.Errorf("Smart.DialTimeout = %v, want 0 (unset)", out.Smart.DialTimeout)
+		}
+		if out.Smart.DialAttempts != 0 {
+			t.Errorf("Smart.DialAttempts = %d, want 0 (unset)", out.Smart.DialAttempts)
+		}
+		if out.Smart.NegativeCacheTTL != 0 {
+			t.Errorf("Smart.NegativeCacheTTL = %v, want 0 (unset)", out.Smart.NegativeCacheTTL)
+		}
+	})
+
+	t.Run("explicit empty smart.listen leaves Listen empty", func(t *testing.T) {
+		t.Parallel()
+		const doc = "smart:\n  listen: \"\"\n"
+		var out port.Config
+		if err := yaml.Unmarshal([]byte(doc), &out); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if out.Smart.Listen != "" {
+			t.Errorf("Smart.Listen = %q, want empty (operator opt-out)", out.Smart.Listen)
+		}
+	})
+
+	t.Run("documented snake-case keys", func(t *testing.T) {
+		t.Parallel()
+		in := port.Config{Smart: port.Smart{Listen: "127.0.0.1:8081"}}
+		raw, err := yaml.Marshal(in)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(raw), "smart:") {
+			t.Errorf("marshaled YAML missing 'smart:' key; got:\n%s", raw)
+		}
+	})
+}

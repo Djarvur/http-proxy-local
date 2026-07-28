@@ -363,4 +363,156 @@ func TestValidate(t *testing.T) {
 			t.Fatal("expected error for socks5.listen without port")
 		}
 	})
+
+	// --- smart.* validation ----------------------------------------------
+	// Mirrors the socks5.listen rule (non-empty MUST parse as host:port) and
+	// adds positivity checks for the three tuning fields (zero is "use default"
+	// and is valid; negative is rejected).
+
+	t.Run("valid smart.listen accepted", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.Smart.Listen = "127.0.0.1:8081"
+		if err := l.Validate(c); err != nil {
+			t.Fatalf("valid smart.listen should pass: %v", err)
+		}
+	})
+
+	t.Run("empty smart.listen accepted as disabled", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.Smart.Listen = "" // absent block OR explicit empty both parse to ""
+		if err := l.Validate(c); err != nil {
+			t.Fatalf("empty smart.listen (disabled) should be valid: %v", err)
+		}
+	})
+
+	t.Run("malformed smart.listen rejected", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.Smart.Listen = "not-a-host-port"
+		err := l.Validate(c)
+		if err == nil {
+			t.Fatal("expected error for malformed smart.listen")
+		}
+		if !errors.Is(err, port.ErrValidation) {
+			t.Errorf("error should wrap port.ErrValidation, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "smart.listen") {
+			t.Errorf("error should name 'smart.listen', got: %v", err)
+		}
+	})
+
+	t.Run("smart.listen missing port rejected", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.Smart.Listen = "127.0.0.1" // host without :port
+		if err := l.Validate(c); err == nil {
+			t.Fatal("expected error for smart.listen without port")
+		}
+	})
+
+	t.Run("non-positive smart.dial_timeout rejected", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.Smart.DialTimeout = -1 * time.Second
+		err := l.Validate(c)
+		if err == nil {
+			t.Fatal("expected error for negative smart.dial_timeout")
+		}
+		if !strings.Contains(err.Error(), "smart.dial_timeout") {
+			t.Errorf("error should name 'smart.dial_timeout', got: %v", err)
+		}
+	})
+
+	t.Run("non-positive smart.dial_attempts rejected", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.Smart.DialAttempts = -1
+		err := l.Validate(c)
+		if err == nil {
+			t.Fatal("expected error for negative smart.dial_attempts")
+		}
+		if !strings.Contains(err.Error(), "smart.dial_attempts") {
+			t.Errorf("error should name 'smart.dial_attempts', got: %v", err)
+		}
+	})
+
+	t.Run("non-positive smart.negative_cache_ttl rejected", func(t *testing.T) {
+		t.Parallel()
+		c := valid
+		c.Smart.NegativeCacheTTL = -1 * time.Second
+		err := l.Validate(c)
+		if err == nil {
+			t.Fatal("expected error for negative smart.negative_cache_ttl")
+		}
+		if !strings.Contains(err.Error(), "smart.negative_cache_ttl") {
+			t.Errorf("error should name 'smart.negative_cache_ttl', got: %v", err)
+		}
+	})
+
+	t.Run("zero tuning fields valid (use default)", func(t *testing.T) {
+		t.Parallel()
+		// Omitted tuning fields are zero — valid; loader applies defaults later.
+		c := valid
+		c.Smart.Listen = "127.0.0.1:8081"
+		// DialTimeout/DialAttempts/NegativeCacheTTL all zero
+		if err := l.Validate(c); err != nil {
+			t.Fatalf("zero tuning fields should be valid: %v", err)
+		}
+	})
+}
+
+// TestLoad_SmartDefaults verifies the loader applies the documented defaults
+// for the three smart tuning fields when they are omitted (zero), so a minimal
+// smart config is just `smart: { listen: ... }`.
+func TestLoad_SmartDefaults(t *testing.T) {
+	t.Parallel()
+	content := `
+smart:
+  listen: 127.0.0.1:8081
+`
+	p := writeConfig(t, t.TempDir(), content)
+	l := yamlconfig.NewLoader()
+	got, err := l.Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Smart.DialTimeout != 3*time.Second {
+		t.Errorf("Smart.DialTimeout default = %v, want 3s", got.Smart.DialTimeout)
+	}
+	if got.Smart.DialAttempts != 2 {
+		t.Errorf("Smart.DialAttempts default = %d, want 2", got.Smart.DialAttempts)
+	}
+	if got.Smart.NegativeCacheTTL != 60*time.Second {
+		t.Errorf("Smart.NegativeCacheTTL default = %v, want 60s", got.Smart.NegativeCacheTTL)
+	}
+}
+
+// TestLoad_SmartExplicitValues verifies explicit tuning values are NOT
+// overridden by defaults.
+func TestLoad_SmartExplicitValues(t *testing.T) {
+	t.Parallel()
+	content := `
+smart:
+  listen: 127.0.0.1:8081
+  dial_timeout: 7s
+  dial_attempts: 5
+  negative_cache_ttl: 2m
+`
+	p := writeConfig(t, t.TempDir(), content)
+	l := yamlconfig.NewLoader()
+	got, err := l.Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.Smart.DialTimeout != 7*time.Second {
+		t.Errorf("Smart.DialTimeout = %v, want 7s", got.Smart.DialTimeout)
+	}
+	if got.Smart.DialAttempts != 5 {
+		t.Errorf("Smart.DialAttempts = %d, want 5", got.Smart.DialAttempts)
+	}
+	if got.Smart.NegativeCacheTTL != 2*time.Minute {
+		t.Errorf("Smart.NegativeCacheTTL = %v, want 2m", got.Smart.NegativeCacheTTL)
+	}
 }

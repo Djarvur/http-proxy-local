@@ -148,6 +148,16 @@ func (o *ReloadOrchestrator) Reload() {
 		o.report(restartRequiredError{Field: "socks5.listen", Old: old.SOCKS5.Listen, New: newCfg.SOCKS5.Listen})
 	}
 
+	// If smart.listen changed (including the block being added or removed),
+	// warn that a restart is required — the smart HTTP listener is not
+	// rebound, started, or stopped mid-flight (same posture as socks5.listen
+	// and the HTTP listen field). The smart TUNING fields (dial_timeout,
+	// dial_attempts, negative_cache_ttl) are read per-request, so changes to
+	// them apply without restart and do NOT emit a restart-required error.
+	if old != nil && old.Smart.Listen != newCfg.Smart.Listen {
+		o.report(restartRequiredError{Field: "smart.listen", Old: old.Smart.Listen, New: newCfg.Smart.Listen})
+	}
+
 	// Signal PAC regen if any PAC-affecting field changed.
 	if old == nil || pacAffectingChanged(old, &newCfg) {
 		o.signalRegen()

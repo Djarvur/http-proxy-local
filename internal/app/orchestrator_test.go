@@ -489,3 +489,142 @@ socks5:
 		}
 	}
 }
+
+// TestReloadOrchestrator_SmartListenChangeLogsRestartRequired proves a change
+// to smart.listen emits a restart-required error and does NOT rebind the smart
+// listener mid-flight. Mirrors the socks5.listen test. Covers all three
+// transitions: address change, block added, block removed.
+func TestReloadOrchestrator_SmartListenChangeLogsRestartRequired(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		initial     port.Smart
+		newConfig   string
+		wantMention string
+	}{
+		{
+			name:        "address changed",
+			initial:     port.Smart{Listen: "127.0.0.1:8081"},
+			newConfig:   "smart:\n  listen: 127.0.0.1:8082\n",
+			wantMention: "smart.listen",
+		},
+		{
+			name:        "block added (was disabled, now enabled)",
+			initial:     port.Smart{Listen: ""},
+			newConfig:   "smart:\n  listen: 127.0.0.1:8081\n",
+			wantMention: "smart.listen",
+		},
+		{
+			name:        "block removed (was enabled, now disabled)",
+			initial:     port.Smart{Listen: "127.0.0.1:8081"},
+			newConfig:   "",
+			wantMention: "smart.listen",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgPtr, rangesPtr, pacPtr, regen := freshSnapshots(t)
+			initial := port.Config{
+				Listen:   "127.0.0.1:8080",
+				Upstream: port.Upstream{URL: "http://up:3128"},
+				Geo:      port.Geo{RefreshInterval: 24 * time.Hour, RetryInterval: 5 * time.Minute},
+				Smart:    tt.initial,
+			}
+			cfgPtr.Store(&initial)
+			stop := app.RunPACRegenerator(regen, cfgPtr, rangesPtr, pacPtr)
+			t.Cleanup(stop)
+
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.yaml")
+			content := `
+listen: 127.0.0.1:8080
+upstream:
+  url: http://up:3128
+geo:
+  refresh_interval: 24h
+  retry_interval: 5m
+` + tt.newConfig
+			writeFile(t, cfgPath, content)
+
+			loader := yamlconfig.NewLoader()
+			errs := make(chan error, 4)
+			orch := app.NewReloadOrchestrator(loader, cfgPath, cfgPtr, regen, errs)
+
+			orch.Reload()
+
+			select {
+			case e := <-errs:
+				if e == nil {
+					t.Fatal("nil error for smart.listen change")
+				}
+				if !contains(e.Error(), "restart") {
+					t.Errorf("smart.listen change error didn't mention restart: %v", e)
+				}
+				if !contains(e.Error(), tt.wantMention) {
+					t.Errorf("smart.listen change error didn't name the field (%q): %v", tt.wantMention, e)
+				}
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("expected restart-required error for smart.listen change")
+			}
+		})
+	}
+}
+
+// TestReloadOrchestrator_SmartTuningChangeNoRestartRequired proves that a
+// change to the smart TUNING fields (dial_timeout, dial_attempts,
+// negative_cache_ttl) does NOT emit a restart-required error — these apply
+// per-request with no listener rebind.
+func TestReloadOrchestrator_SmartTuningChangeNoRestartRequired(t *testing.T) {
+	t.Parallel()
+
+	cfgPtr, rangesPtr, pacPtr, regen := freshSnapshots(t)
+	initial := port.Config{
+		Listen:   "127.0.0.1:8080",
+		Upstream: port.Upstream{URL: "http://up:3128"},
+		Geo:      port.Geo{RefreshInterval: 24 * time.Hour, RetryInterval: 5 * time.Minute},
+		Smart:    port.Smart{Listen: "127.0.0.1:8081", DialTimeout: 3 * time.Second, DialAttempts: 2, NegativeCacheTTL: 60 * time.Second},
+	}
+	cfgPtr.Store(&initial)
+	stop := app.RunPACRegenerator(regen, cfgPtr, rangesPtr, pacPtr)
+	t.Cleanup(stop)
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	// Same smart.listen, but the tuning fields change. No restart-required
+	// error should mention smart.listen (or smart at all).
+	writeFile(t, cfgPath, `
+listen: 127.0.0.1:8080
+upstream:
+  url: http://up:3128
+geo:
+  refresh_interval: 24h
+  retry_interval: 5m
+smart:
+  listen: 127.0.0.1:8081
+  dial_timeout: 7s
+  dial_attempts: 5
+  negative_cache_ttl: 2m
+`)
+
+	loader := yamlconfig.NewLoader()
+	errs := make(chan error, 4)
+	orch := app.NewReloadOrchestrator(loader, cfgPath, cfgPtr, regen, errs)
+
+	orch.Reload()
+
+	timer := time.After(200 * time.Millisecond)
+	for {
+		select {
+		case e := <-errs:
+			if e != nil && contains(e.Error(), "smart") {
+				t.Errorf("unexpected smart-related error for tuning-only change: %v", e)
+			}
+		case <-timer:
+			return
+		}
+	}
+}
