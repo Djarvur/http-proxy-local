@@ -88,8 +88,6 @@ install -m 0600 ./config.yaml "$CONFIG_DST"
 
 # --- 4. write the launchd plist (user-level LaunchAgent, no root) ---
 
-USER_NAME="$(id -un)"
-
 echo "install: writing launchd plist to $PLIST_DST"
 install -d -m 0755 "$(dirname "$PLIST_DST")"
 install -d -m 0755 "$(dirname "$LOG_DST")"

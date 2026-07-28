@@ -26,6 +26,12 @@ die() {
     exit 1
 }
 
+# Resolve the repo root from the script location so the build works regardless
+# of the caller's CWD.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
+
 # --- preflight ---
 
 command -v go >/dev/null 2>&1 || die "go not found on PATH. Install Go or use mise."
@@ -33,12 +39,6 @@ command -v go >/dev/null 2>&1 || die "go not found on PATH. Install Go or use mi
 [ -f ./install.sh ] || die "install.sh not found in repo root."
 [ -f ./README.md ] || die "README.md not found in repo root."
 [ -f ./LICENSE ] || die "LICENSE not found in repo root."
-
-# Resolve the repo root from the script location so the build works regardless
-# of the caller's CWD.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$REPO_ROOT"
 
 echo "build: staging into $STAGE_DIR"
 rm -rf "$STAGE_DIR"
@@ -90,7 +90,6 @@ tar -tzf "$ARCHIVE_PATH"
 echo
 echo "Hand-off: copy $ARCHIVE_PATH to the target mac, then:"
 echo "  tar -xzf $(basename "$ARCHIVE_PATH")"
-echo "  cd http-proxy-local-mac-amd64-v${VERSION}  # or wherever you extracted"
 echo "  ./install.sh"
 echo
 echo "NOTE: this archive contains the upstream credential from your live"
