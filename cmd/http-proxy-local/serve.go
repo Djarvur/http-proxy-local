@@ -13,29 +13,35 @@ import (
 	"github.com/Djarvur/http-proxy-local/internal/port"
 )
 
-// shutdownTimeout is the budget for gracefully shutting down the HTTP server
+// shutdownTimeout is the budget for gracefully shutting down the HTTP servers
 // on context cancellation. Matches the design D2 coordination budget.
 const shutdownTimeout = 10 * time.Second
 
-// serveBoth runs the HTTP server on httpLn and (when socksLn != nil) the
-// SOCKS5 listener concurrently, blocking until ctx is cancelled OR either
-// listener exits. On exit it ensures both listeners are closed and the HTTP
-// server is shut down.
+// serveAll runs up to three listeners concurrently and blocks until ctx is
+// cancelled OR any one listener exits. On exit it ensures all running
+// listeners are closed and HTTP servers shut down.
 //
-// Coordination contract (design D2): either listener failing unexpectedly
-// tears down the other. A half-broken process is worse than a clean exit —
-// if SOCKS5 dies but HTTP keeps serving, the operator won't notice the
-// silent degradation; surfacing the failure forces a restart and a log line.
+// Listeners:
+//   - srv on httpLn: the dumb HTTP/PAC listener (always present).
+//   - socksLn (when non-nil): the SOCKS5 listener (opt-in via socks5.listen).
+//   - smartSrv on smartLn (when both non-nil): the smart HTTP listener
+//     (opt-in via smart.listen).
+//
+// Coordination contract (design D2): any listener failing unexpectedly tears
+// down the others. A half-broken process is worse than a clean exit — silent
+// degradation is hard to diagnose; surfacing the failure forces a restart and
+// a log line.
 //
 // Returns the error from whichever listener failed first (nil on clean
-// shutdown via ctx cancellation). http.ErrServerClosed is the expected
-// return for the normal-shutdown path and is NOT treated as an error by
-// callers.
-func serveBoth(
+// shutdown via ctx cancellation). http.ErrServerClosed is the expected return
+// for the normal-shutdown path and is NOT treated as an error by callers.
+func serveAll(
 	ctx context.Context,
 	srv *http.Server,
 	httpLn net.Listener,
 	socksLn net.Listener,
+	smartSrv *http.Server,
+	smartLn net.Listener,
 	cfgPtr *atomic.Pointer[port.Config],
 ) error {
 	httpDone := make(chan error, 1)
@@ -55,48 +61,87 @@ func serveBoth(
 		}()
 	}
 
-	// Wait for shutdown trigger: ctx cancellation, or either listener exiting.
+	var smartDone chan error
+	if smartSrv != nil && smartLn != nil {
+		smartDone = make(chan error, 1)
+		go func() { smartDone <- smartSrv.Serve(smartLn) }()
+	}
+
+	// Wait for shutdown trigger: ctx cancellation, or any listener exiting.
 	select {
 	case <-ctx.Done():
-		return shutdownAll(srv, socksLn, httpDone, socksDone)
+		return shutdownAll(srv, smartSrv, socksLn, smartLn, httpDone, smartDone, socksDone)
 
 	case err := <-httpDone:
-		// HTTP listener exited unexpectedly. Tear down SOCKS5 (if running)
-		// and close everything. The HTTP error is the one we surface.
 		log.Printf("http listener exited: %v", err)
 		_ = socksLnClose(socksLn)
+		_ = smartLnClose(smartLn)
+		_ = shutdownSrv(smartSrv)
 		_ = socksDoneWait(socksDone)
+		_ = socksDoneWait(smartDone)
 		return err
 
 	case <-socksDoneChan(socksDone):
-		// SOCKS5 listener exited unexpectedly. Tear down HTTP.
 		log.Printf("socks5 listener exited")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-		<-httpDone
+		_ = shutdownBothHTTP(ctx, srv, smartSrv, httpDone, smartDone)
+		_ = smartLnClose(smartLn)
 		return errors.New("socks5 listener exited unexpectedly")
+
+	case err := <-smartDoneChan(smartDone):
+		log.Printf("smart listener exited: %v", err)
+		_ = shutdownBothHTTP(ctx, srv, smartSrv, httpDone, smartDone)
+		_ = socksLnClose(socksLn)
+		_ = socksDoneWait(socksDone)
+		return err
 	}
 }
 
-// shutdownAll is the clean-shutdown path: srv.Shutdown + close both listeners.
-// The HTTP listener is closed by srv.Shutdown; socksLn (if non-nil) is closed
-// here to unblock socks5.Serve's Accept loop.
+// shutdownBothHTTP shuts down both HTTP servers (dumb + smart) and waits for
+// their Serve goroutines to exit. Used when a non-HTTP listener fails.
+func shutdownBothHTTP(ctx context.Context, srv, smartSrv *http.Server, httpDone, smartDone <-chan error) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	_ = srv.Shutdown(shutdownCtx)
+	<-httpDone
+	_ = shutdownSrv(smartSrv)
+	_ = socksDoneWait(smartDone)
+	_ = ctx // ctx accepted for symmetry/future use; not currently read
+	return nil
+}
+
+// shutdownSrv shuts down a possibly-nil HTTP server. No-op when nil.
+func shutdownSrv(s *http.Server) error {
+	if s == nil {
+		return nil
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	return s.Shutdown(shutdownCtx)
+}
+
+// shutdownAll is the clean-shutdown path: shut down both HTTP servers and
+// close both opt-in listeners.
 func shutdownAll(
 	srv *http.Server,
+	smartSrv *http.Server,
 	socksLn net.Listener,
+	smartLn net.Listener,
 	httpDone <-chan error,
+	smartDone <-chan error,
 	socksDone <-chan error,
 ) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
 	<-httpDone
+	_ = shutdownSrv(smartSrv)
+	_ = socksDoneWait(smartDone)
 	// Closing socksLn is what unblocks socks5.Serve's Accept loop (its own
 	// ctx-cancel goroutine also closes it; the double-close is harmless —
 	// net.Listener.Close returns an error we ignore on the second call).
 	_ = socksLnClose(socksLn)
 	_ = socksDoneWait(socksDone)
+	_ = smartLnClose(smartLn)
 	return nil
 }
 
@@ -108,8 +153,17 @@ func socksLnClose(ln net.Listener) error {
 	return ln.Close()
 }
 
+// smartLnClose closes a possibly-nil smart listener. (Same shape as
+// socksLnClose; kept separate for readability at call sites.)
+func smartLnClose(ln net.Listener) error {
+	if ln == nil {
+		return nil
+	}
+	return ln.Close()
+}
+
 // socksDoneWait blocks on a possibly-nil done channel. Returns nil if the
-// channel is nil (no SOCKS5 goroutine to wait for).
+// channel is nil (no goroutine to wait for).
 func socksDoneWait(done <-chan error) error {
 	if done == nil {
 		return nil
@@ -121,5 +175,11 @@ func socksDoneWait(done <-chan error) error {
 // no SOCKS5 goroutine (selecting on a nil channel blocks forever, which is
 // exactly what we want — the "SOCKS5 exited" branch is unreachable).
 func socksDoneChan(done <-chan error) <-chan error {
+	return done
+}
+
+// smartDoneChan returns the smart done channel for select-use, or nil if
+// there is no smart goroutine.
+func smartDoneChan(done <-chan error) <-chan error {
 	return done
 }

@@ -104,3 +104,50 @@ pac:
 # or stopped mid-flight. Same posture as the HTTP `listen` field.
 # socks5:
 #   listen: 127.0.0.1:1080
+
+# Optional smart HTTP listener — a SECOND HTTP listener on a separate port
+# that applies the same routing precedence as the PAC (blacklist → whitelist
+# → local/private → RU geo → default) but evaluates it server-side. Intended
+# for clients that ignore the system PAC and expose no way to inject one
+# (notably the zcode CLI), so their traffic gets the same DIRECT/Upstream
+# decisions a browser would make via the PAC. Browsers keep using the dumb
+# HTTP listener + PAC; PAC-blind clients point at this listener.
+#
+# The listener is OPT-IN: it only starts when `smart.listen` is non-empty.
+# There is NO activating default port — you MUST write a value (or any
+# non-empty value) here to enable. Omit the block entirely, or leave
+# `listen` empty, and the binary behaves exactly as before (full backward
+# compatibility).
+#
+# Routing precedence (mirrors the PAC; first match wins):
+#   1. blacklist  → [Direct, Upstream]  (direct first, fall back to upstream
+#                                        if direct fails — e.g. z.ai briefly
+#                                        unreachable directly)
+#   2. whitelist  → [Upstream]
+#   3. local/private network → [Direct]
+#   4. RU IPv4 (any resolved IP in a RU range) → [Direct], dialed via the
+#      matched RU IP. NO fallback — move the host to the whitelist if direct
+#      is unreliable.
+#   5. default → [Upstream]
+#
+# The smart listener resolves hostnames via the system resolver (it does NOT
+# add its own DNS cache — the system resolver already caches correctly).
+# It does NOT serve /proxy.pac (PAC-blind clients don't fetch it, and the
+# PAC's PROXY directive would point at the dumb listener anyway).
+#
+# Negative cache: when a Direct attempt fails (blacklist case), the hostname
+# is remembered as "direct-down" for `negative_cache_ttl`, so subsequent
+# requests skip the doomed Direct attempt and go straight to upstream.
+#
+# Hot-reload:
+#   - routing rules (whitelist/blacklist): apply on the next request, no
+#     restart (per-request read of the live config).
+#   - `smart.listen` (or adding/removing the block): restart required — the
+#     listener is not rebound mid-flight. Same posture as `listen`/`socks5.listen`.
+#   - tuning fields (dial_timeout/dial_attempts/negative_cache_ttl): apply on
+#     the next request, no restart.
+# smart:
+#   listen: 127.0.0.1:8081
+#   dial_timeout: 3s           # per-attempt timeout for Direct dials
+#   dial_attempts: 2           # Direct retries before falling back to upstream
+#   negative_cache_ttl: 60s    # how long to remember a Direct failure

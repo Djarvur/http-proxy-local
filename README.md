@@ -38,6 +38,10 @@ The PAC evaluates rules top-down; first match wins:
 Both `whitelist` and `blacklist` accept suffix patterns (`*.example.com`)
 and CIDR ranges (`10.0.0.0/8`).
 
+The same precedence is applied **server-side** by the optional smart HTTP
+listener (below) for clients that ignore the PAC — so browsers and PAC-blind
+clients reach the same DIRECT/Upstream decisions.
+
 ## Quick start
 
 ### Prerequisites
@@ -146,6 +150,55 @@ inside a loopback + TLS-upstream channel (DPI never sees the localhost hop),
 and it cannot be cascaded through an HTTP-CONNECT upstream. SOCKS5
 CONNECT-only reuses the existing cascade directly. See `openspec/changes/
 add-socks5-listener/design.md` for the full alternatives analysis.
+
+## Using the smart HTTP listener (e.g. for zcode)
+
+Some clients — notably the **`zcode`** CLI — honour `HTTP_PROXY`/`HTTPS_PROXY`
+but **ignore the system PAC** and expose no way to inject one. Without help,
+every request they make is forced through the upstream, even to hosts that
+are reachable directly (`z.ai`, RU-domestic endpoints, RFC1918 services).
+
+The **smart HTTP listener** solves this: a second HTTP listener on a separate
+port that applies the *same* routing precedence as the PAC
+(blacklist → whitelist → local/private → RU geo → default) but evaluates it
+**server-side**, so PAC-blind clients get the same DIRECT/Upstream decisions
+a browser would make.
+
+The smart listener is **opt-in**. It only starts when `smart.listen` is
+non-empty:
+
+```yaml
+smart:
+  listen: 127.0.0.1:8081
+  # Optional tuning (defaults shown):
+  dial_timeout: 3s           # per-attempt timeout for direct dials
+  dial_attempts: 2           # direct retries before falling back to upstream
+  negative_cache_ttl: 60s    # how long to remember a direct failure
+```
+
+Point the PAC-blind client at it:
+
+```bash
+export HTTP_PROXY=http://127.0.0.1:8081
+export HTTPS_PROXY=http://127.0.0.1:8081
+```
+
+### How it differs from the PAC
+
+The precedence is identical (parity is enforced by a property test that runs
+both the PAC and the server-side decision over the same corpus). Execution
+differs in one place: the **blacklist** rule emits `[Direct, Upstream]` and
+dials them in order — if direct fails (e.g. `z.ai` is briefly unreachable
+directly), it falls back to upstream. A failed direct attempt is remembered
+for `negative_cache_ttl`, so subsequent requests skip the doomed direct dial
+and go straight to upstream. RU-geo Direct has **no** fallback — move an
+unreliable RU host to the whitelist if you want it routed via upstream.
+
+The smart listener does **not** serve `/proxy.pac` (PAC-blind clients don't
+fetch it, and the PAC's `PROXY` directive would point at the dumb listener
+anyway). It resolves hostnames via the system resolver (no application DNS
+cache — the system resolver already caches correctly). See
+`openspec/changes/add-smart-http-listener/design.md` for the full design.
 
 ## Hot reload
 

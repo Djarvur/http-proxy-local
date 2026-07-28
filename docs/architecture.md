@@ -70,12 +70,15 @@ internal/
 │   └── port.go                GeoSource, Cache, Clock, ConfigLoader interfaces
 ├── app/                       pure logic + orchestration
 │   ├── pac.go                 RenderPAC — pure function, no I/O
+│   ├── decide.go              Decide — server-side routing precedence for the smart listener (pure)
 │   ├── ranges.go              ParseRIPELine, MergeRanges, ParseAndMerge — pure
-│   ├── runtime.go             RunPACRegenerator, ReloadOrchestrator (incl. socks5.listen restart-required)
+│   ├── runtime.go             RunPACRegenerator, ReloadOrchestrator (incl. socks5/smart listen restart-required)
 │   └── geofetcher.go          GeoFetcher — the dual-interval state machine
-├── in/                        inbound adapters (two protocols, shared upstream cascade)
-│   ├── http/                  HTTP/PAC adapter
-│   │   └── server.go          /proxy.pac handler + forwarder + CONNECT + basic auth
+├── in/                        inbound adapters (three listeners, shared upstream cascade)
+│   ├── http/                  HTTP/PAC adapter (dumb) + smart HTTP adapter (server-side routing)
+│   │   ├── server.go          dumb: /proxy.pac handler + forwarder + CONNECT + basic auth
+│   │   ├── smart.go           smart: NewSmart handler + strategy-driven CONNECT/forward
+│   │   └── negcache.go        smart: hostname-keyed negative cache for failed Direct dials
 │   ├── socks5/                SOCKS5 (RFC 1928) adapter — CONNECT-only, no auth, no routing
 │   │   ├── doc.go             package contract
 │   │   ├── negotiate.go       method negotiation (only 0x00 No-Auth accepted)
@@ -91,21 +94,67 @@ internal/
     └── yamlconfig/            parse + validate config.yaml (incl. socks5.listen)
 ```
 
-### Two inbound adapters, one upstream cascade
+### Three inbound adapters, one upstream cascade
 
-The proxy has two inbound adapters — HTTP/PAC (the original, for browsers)
-and SOCKS5 (added for clients like Telegram that can't use HTTP proxy). Both
-share a single upstream cascade (`internal/in/cascade/`): the same
+The proxy has three inbound adapters:
+
+- **HTTP/PAC** (the original, for browsers) — serves `/proxy.pac` and
+  forwards everything else to the upstream cascade. Dumb: no routing
+  decisions, the browser makes them via the PAC.
+- **SOCKS5** (added for clients like Telegram that can't use HTTP proxy) —
+  tunnels CONNECT requests through the cascade with no routing layer. The
+  client decides destinations.
+- **Smart HTTP** (added for PAC-blind clients like zcode) — a second HTTP
+  listener on a separate port that applies the PAC-equivalent routing
+  precedence *server-side*, emitting an ordered Direct/Upstream strategy
+  list per request. See `add-smart-http-listener` for the design.
+
+All three share a single upstream cascade (`internal/in/cascade/`): the same
 `Dial(u, target)` + `Tunnel(a, b)` logic, originally written for the HTTP
 listener's CONNECT handler, was extracted so the subtle tunneling,
 half-close, and buffered-bytes-after-read behaviors live in exactly one
-place. See the `add-socks5-listener` change archive for the design decisions
-(SOCKS5 over MTProto, CONNECT-only over UDP ASSOCIATE, no routing layer,
-stdlib hand-roll over go-socks5, manual coordination over sourcegraph/conc).
+place. See the `add-socks5-listener` change archive for the SOCKS5 design
+decisions (SOCKS5 over MTProto, CONNECT-only over UDP ASSOCIATE, no routing
+layer, stdlib hand-roll over go-socks5, manual coordination over
+sourcegraph/conc).
 
-The SOCKS5 adapter is **opt-in**: it only starts when `socks5.listen` is
-non-empty (design decision D3 — no activating default port, full backward
-compatibility for operators who don't configure it).
+The SOCKS5 and smart HTTP adapters are both **opt-in**: each starts only
+when its `listen` field is non-empty (design decisions D3/D8 — no activating
+default port, full backward compatibility for operators who don't configure
+them).
+
+#### Smart HTTP listener: server-side routing with parity to the PAC
+
+The smart listener exists because some clients (notably the `zcode` CLI)
+ignore the system PAC and expose no way to inject one, but still accept an
+HTTP proxy. Without the smart listener, their traffic is forced through the
+upstream even for hosts reachable directly (z.ai, RU-domestic endpoints,
+RFC1918 services). With it, they get the same DIRECT/Upstream decisions a
+browser would make.
+
+The precedence mirrors the PAC exactly (blacklist → whitelist → local → RU
+geo → default), but execution differs: the smart listener emits an *ordered
+strategy list* and dials strategies in sequence, so the blacklist rule can
+fall back from Direct to Upstream when direct fails. RU-geo Direct has NO
+fallback (the operator moves an unreliable RU host to the whitelist instead).
+Parity with the PAC is enforced by a property test (`decide_parity_test.go`)
+that runs both the PAC (via the node harness) and `app.Decide` over a fixed
+corpus and compares the top-priority strategy.
+
+Three deliberate stances:
+
+- **System resolver, no application DNS cache.** Correct DNS caching is hard
+  (per-RR TTLs, negative answers, `/etc/hosts`, single-flight); the system
+  resolver already does it. Adding a second cache risks stale answers that
+  break routing. The negative cache is a *different* concern — it caches
+  Direct-dial connection failures, not DNS answers.
+- **Fallback only for blacklist.** Only the blacklist rule yields
+  `[Direct, Upstream]`; every other rule yields a single strategy. This
+  matches the operator's intent: "direct-first with upstream fallback for
+  hosts that are normally reachable directly."
+- **No `/proxy.pac` on the smart listener.** PAC-blind clients don't fetch
+  it, and the PAC's `PROXY` directive would point at the dumb listener —
+  serving it would mislead. The smart listener 404s on `/proxy.pac`.
 
 Key invariants:
 

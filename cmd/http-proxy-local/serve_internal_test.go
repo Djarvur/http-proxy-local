@@ -41,9 +41,9 @@ func TestServeBoth_HTTPOnly(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serveBoth(ctx, srv, httpLn, nil, nil) }()
+	go func() { done <- serveAll(ctx, srv, httpLn, nil, nil, nil, cfgPtr) }()
 
-	if !probeURL(t, "http://"+httpLn.Addr().String()+httpserver.PACPath, 2*time.Second) {
+	if !probeURL(t, "http://"+httpLn.Addr().String()+httpserver.PACPath) {
 		t.Fatal("HTTP listener never became ready")
 	}
 
@@ -85,7 +85,7 @@ func TestServeBoth_HTTPAndSOCKS5(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serveBoth(ctx, srv, httpLn, socksLn, cfgPtr) }()
+	go func() { done <- serveAll(ctx, srv, httpLn, socksLn, nil, nil, cfgPtr) }()
 
 	if !probeDial(t, httpLn.Addr().String(), 2*time.Second) {
 		t.Fatal("HTTP listener never accepted")
@@ -139,7 +139,7 @@ func TestServeBoth_EitherListenerFailsTearsDownOther(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- serveBoth(ctx, srv, httpLn, socksLn, cfgPtr) }()
+	go func() { done <- serveAll(ctx, srv, httpLn, socksLn, nil, nil, cfgPtr) }()
 
 	// Wait for serveBoth to start serving so the close actually interrupts
 	// an Accept rather than racing startup.
@@ -161,9 +161,9 @@ func TestServeBoth_EitherListenerFailsTearsDownOther(t *testing.T) {
 }
 
 // probeURL polls a URL until it returns any response or the deadline passes.
-func probeURL(t *testing.T, target string, timeout time.Duration) bool {
+func probeURL(t *testing.T, target string) bool {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := http.Get(target) //nolint:gosec // test probe to a localhost test server
 		if err == nil {
@@ -196,4 +196,102 @@ func probeDial(t *testing.T, addr string, timeout time.Duration) bool {
 func isClosed(ln net.Listener) bool {
 	_, err := ln.Accept()
 	return err != nil
+}
+
+// TestServeAll_HTTPAndSmart proves the HTTP and smart HTTP listeners run
+// concurrently, both accept requests, and both shut down on context cancel.
+// SOCKS5 is nil here (the smart listener is independent of SOCKS5).
+func TestServeAll_HTTPAndSmart(t *testing.T) {
+	t.Parallel()
+
+	cfgPtr := &atomic.Pointer[port.Config]{}
+	pacPtr := &atomic.Pointer[[]byte]{}
+	body := []byte("pac")
+	pacPtr.Store(&body)
+	rangesPtr := &atomic.Pointer[port.RURanges]{}
+	emptyRanges := port.RURanges{}
+	rangesPtr.Store(&emptyRanges)
+
+	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("http listen: %v", err)
+	}
+	srv := &http.Server{
+		Handler:           httpserver.New(cfgPtr, pacPtr),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	smartLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("smart listen: %v", err)
+	}
+	smartSrv := &http.Server{
+		Handler:           httpserver.NewSmart(cfgPtr, rangesPtr, net.DefaultResolver, httpserver.NewNegativeCache()),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serveAll(ctx, srv, httpLn, nil, smartSrv, smartLn, cfgPtr) }()
+
+	// Both listeners must accept.
+	if !probeURL(t, "http://"+httpLn.Addr().String()+httpserver.PACPath) {
+		t.Fatal("HTTP listener never became ready")
+	}
+	// Smart listener rejects /proxy.pac with 404 — that still proves it's up.
+	if !probeURL(t, "http://"+smartLn.Addr().String()+httpserver.PACPath) {
+		t.Fatal("smart listener never became ready")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("serveAll returned unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serveAll did not return within 5s of cancel (HTTP+smart mode)")
+	}
+
+	if !isClosed(smartLn) {
+		t.Error("smart listener not closed after shutdown")
+	}
+}
+
+// TestServeAll_SmartAbsentNoBind proves that when smartSrv is nil, no smart
+// listener is bound and behavior is identical to the pre-smart-listener build.
+func TestServeAll_SmartAbsentNoBind(t *testing.T) {
+	t.Parallel()
+
+	cfgPtr := &atomic.Pointer[port.Config]{}
+	pacPtr := &atomic.Pointer[[]byte]{}
+	body := []byte("pac")
+	pacPtr.Store(&body)
+
+	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("http listen: %v", err)
+	}
+	srv := &http.Server{
+		Handler:           httpserver.New(cfgPtr, pacPtr),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	// smartSrv and smartLn both nil → smart disabled.
+	go func() { done <- serveAll(ctx, srv, httpLn, nil, nil, nil, cfgPtr) }()
+
+	if !probeURL(t, "http://"+httpLn.Addr().String()+httpserver.PACPath) {
+		t.Fatal("HTTP listener never became ready")
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("serveAll returned unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serveAll did not return within 5s of cancel (HTTP-only mode)")
+	}
 }

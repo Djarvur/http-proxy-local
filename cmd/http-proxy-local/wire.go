@@ -156,27 +156,55 @@ func Run(ctx context.Context, configPath string) error {
 		ReadHeaderTimeout: 10 * time.Second, // mitigates Slowloris (gosec G112)
 	}
 
-	// SOCKS5 listener: bind only when configured (design D3 — empty
-	// socks5.listen means disabled, full backward compatibility). A bind
-	// failure here is fatal, same posture as the HTTP listener.
-	var socksLn net.Listener
-	if initial.SOCKS5.Listen != "" {
-		socksLn, err = net.Listen("tcp", initial.SOCKS5.Listen)
-		if err != nil {
-			_ = ln.Close()
-			return fmt.Errorf("listen socks5 on %s: %w", initial.SOCKS5.Listen, err)
-		}
+	// Bind the opt-in listeners (SOCKS5 and smart HTTP). Both are disabled
+	// when their listen address is empty — full backward compatibility.
+	socksLn, smartLn, smartSrv, err := bindOptInListeners(initial, cfgPtr, rangesPtr, ln)
+	if err != nil {
+		return err
 	}
 
-	// serveBoth blocks until ctx is cancelled OR either listener exits. On
-	// exit it shuts both down (design D2: either failing tears down the
-	// other — a half-broken process is worse than a clean exit).
-	serveErr := serveBoth(ctx, srv, ln, socksLn, cfgPtr)
+	// serveAll blocks until ctx is cancelled OR any listener exits. On exit it
+	// shuts all running listeners down (design D2: any failing tears down the
+	// others — a half-broken process is worse than a clean exit).
+	serveErr := serveAll(ctx, srv, ln, socksLn, smartSrv, smartLn, cfgPtr)
 	_ = errsDone // see comment above about errs being left open
 	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}
 	return nil
+}
+
+// bindOptInListeners binds the SOCKS5 and smart HTTP listeners when their
+// respective listen addresses are non-empty (design D3/D8: empty = disabled).
+// On any bind failure it closes everything already bound and returns an error.
+// ln is the already-bound dumb HTTP listener (closed on failure so the caller
+// doesn't leak it).
+func bindOptInListeners(
+	initial port.Config,
+	cfgPtr *atomic.Pointer[port.Config],
+	rangesPtr *atomic.Pointer[port.RURanges],
+	ln net.Listener,
+) (socksLn net.Listener, smartLn net.Listener, smartSrv *http.Server, err error) {
+	if initial.SOCKS5.Listen != "" {
+		socksLn, err = net.Listen("tcp", initial.SOCKS5.Listen)
+		if err != nil {
+			_ = ln.Close()
+			return nil, nil, nil, fmt.Errorf("listen socks5 on %s: %w", initial.SOCKS5.Listen, err)
+		}
+	}
+	if initial.Smart.Listen != "" {
+		smartLn, err = net.Listen("tcp", initial.Smart.Listen)
+		if err != nil {
+			_ = ln.Close()
+			_ = socksLnClose(socksLn)
+			return nil, nil, nil, fmt.Errorf("listen smart on %s: %w", initial.Smart.Listen, err)
+		}
+		smartSrv = &http.Server{
+			Handler:           httpserver.NewSmart(cfgPtr, rangesPtr, net.DefaultResolver, httpserver.NewNegativeCache()),
+			ReadHeaderTimeout: 10 * time.Second, // mitigates Slowloris (gosec G112)
+		}
+	}
+	return socksLn, smartLn, smartSrv, nil
 }
 
 // waitForFirstPAC polls pacPtr until it's non-nil or ctx is done.
