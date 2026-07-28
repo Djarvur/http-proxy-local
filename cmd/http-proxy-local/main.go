@@ -12,12 +12,32 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/Djarvur/http-proxy-local/internal/version"
 )
 
+// versionString returns the line printed by --version: "http-proxy-local <Version>".
+func versionString() string {
+	return "http-proxy-local " + version.Version
+}
+
 func main() {
+	// Register all flags on the default FlagSet before parsing, then parse
+	// once. --version and -v both bind to showVersion (either one triggers the
+	// version short-circuit). The short-circuit happens before any startup
+	// work — no config load, no listeners — and exits 0.
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
+	flag.BoolVar(&showVersion, "v", false, "print version and exit (shorthand for --version)")
 	configPath := flag.String("config", "", "path to config.yaml (defaults to ~/.config/http-proxy-local/config.yaml)")
 	flag.Parse()
 
+	if showVersion {
+		log.Println(versionString())
+		return
+	}
+
+	log.Printf("http-proxy-local %s starting", version.Version)
 	if err := mainErr(context.Background(), *configPath); err != nil {
 		log.Printf("http-proxy-local exited with error: %v", err)
 		os.Exit(1)
