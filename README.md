@@ -49,8 +49,12 @@ curl -L https://github.com/Djarvur/http-proxy-local/releases/latest/download/htt
 ```
 
 macOS binaries are **unsigned**. On first run Gatekeeper will block them —
-right-click → Open (or `xattr -d com.apple.quarantine /path/to/binary`) to
+right-click → Open (or `xattr -dr com.apple.quarantine /path/to/binary`) to
 allow execution. See Apple's docs on opening apps from unidentified developers.
+
+Once built or downloaded, point your OS/browser at the PAC URL
+(`http://127.0.0.1:8080/proxy.pac` by default) — see [Quick start](#quick-start)
+for OS-specific configuration steps.
 
 ### Build from source
 
