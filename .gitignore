@@ -16,3 +16,6 @@
 # Editor / OS noise
 .DS_Store
 *.swp
+
+# GoReleaser build output (local snapshot builds, CI artifacts).
+/dist/

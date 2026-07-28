@@ -1,0 +1,50 @@
+# GoReleaser config for http-proxy-local.
+#
+# Builds static binaries for 6 targets (linux/darwin/windows x amd64/arm64),
+# packages each as an archive (.tar.gz for unix, .zip for windows), and emits
+# a checksums.txt. Triggered by .github/workflows/release.yml on `v*` tags.
+#
+# Validate locally with:    goreleaser check
+# Dry-run a full build:     goreleaser release --clean --snapshot
+# (snapshot builds into dist/ without publishing — no tag required.)
+
+version: 2
+
+project_name: http-proxy-local
+
+builds:
+  - main: ./cmd/http-proxy-local
+    binary: http-proxy-local
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/Djarvur/http-proxy-local/internal/version.Version={{.Version}}
+
+archives:
+  - format: tar.gz
+    # name_template uses title-cased OS + arch for readable archive names:
+    # http-proxy-local_0.1.0_Linux_arm64.tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_
+      {{- title .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  use: github
+  sort: asc
+
+release:
+  draft: false
+  prerelease: auto
