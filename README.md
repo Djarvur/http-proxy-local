@@ -197,8 +197,8 @@ unreliable RU host to the whitelist if you want it routed via upstream.
 The smart listener does **not** serve `/proxy.pac` (PAC-blind clients don't
 fetch it, and the PAC's `PROXY` directive would point at the dumb listener
 anyway). It resolves hostnames via the system resolver (no application DNS
-cache — the system resolver already caches correctly). See
-`openspec/changes/add-smart-http-listener/design.md` for the full design.
+cache — the system resolver already caches correctly). See the
+`add-smart-http-listener` change archive for the full design.
 
 ## Hot reload
 
