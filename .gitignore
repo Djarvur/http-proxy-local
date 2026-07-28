@@ -10,6 +10,9 @@
 /.zcode/
 /.claude/
 
+# Superpowers SDD scratch (task briefs, reports, review diffs).
+/.superpowers/
+
 # Editor / OS noise
 .DS_Store
 *.swp
