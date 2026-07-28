@@ -1,0 +1,41 @@
+# Release workflow: on `v*` tag push, GoReleaser builds the 6 cross-platform
+# archives and publishes a GitHub Release. Uses the default GITHUB_TOKEN —
+# no extra secrets required.
+#
+# Local validation: `goreleaser check` and `goreleaser release --snapshot`
+# (both run before tagging; see the plan).
+#
+# GoReleaser version is pinned to v2.17.1 (instead of `latest`) for
+# reproducibility: `.goreleaser.yaml` uses `archives.format`/`format_overrides`,
+# which GoReleaser deprecated in 2.17.x. Pinning to the exact version we
+# validated the config against locally prevents a future GoReleaser release
+# from breaking CI with no local symptom.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # GoReleaser creates the Release + uploads assets
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history → GoReleaser changelog across all tags
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.17.1
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
