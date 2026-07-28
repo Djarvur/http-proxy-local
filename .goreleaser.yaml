@@ -28,7 +28,8 @@ builds:
       - -s -w -X github.com/Djarvur/http-proxy-local/internal/version.Version={{.Version}}
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     # name_template uses title-cased OS + arch for readable archive names:
     # http-proxy-local_0.1.0_Linux_arm64.tar.gz
     name_template: >-
@@ -36,7 +37,8 @@ archives:
       {{- title .Os }}_{{ .Arch }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
 
 checksum:
   name_template: 'checksums.txt'
