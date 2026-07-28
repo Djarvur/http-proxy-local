@@ -1,6 +1,8 @@
 # http-proxy-local
 
-A self-contained local HTTP routing proxy for macOS. It serves a smart
+[![CI](https://github.com/Djarvur/http-proxy-local/actions/workflows/pr.yml/badge.svg)](https://github.com/Djarvur/http-proxy-local/actions/workflows/pr.yml)
+
+A self-contained local HTTP routing proxy for macOS, Linux, and Windows. It serves a smart
 [Proxy Auto-Config (PAC)](https://en.wikipedia.org/wiki/Proxy_auto-config)
 file that routes Russian-IP traffic directly and sends everything else
 through a configurable upstream proxy. The config file is hot-reloaded —
@@ -22,6 +24,49 @@ edit it and the next request reflects the change, no restart needed.
 The PAC performs all routing decisions **client-side** (in the browser),
 so the proxy itself stays simple and HTTPS works without certificate
 shenanigans.
+
+## Installation
+
+### Download a binary
+
+Pre-built binaries for Linux, macOS, and Windows (amd64 + arm64 each) are
+published on the [Releases page](https://github.com/Djarvur/http-proxy-local/releases/latest).
+Download the archive for your platform, extract it, and run:
+
+| Platform | Archive |
+|---|---|
+| Linux amd64 | `http-proxy-local_<version>_Linux_amd64.tar.gz` |
+| Linux arm64 | `http-proxy-local_<version>_Linux_arm64.tar.gz` |
+| macOS amd64 | `http-proxy-local_<version>_Darwin_amd64.tar.gz` |
+| macOS arm64 (Apple Silicon) | `http-proxy-local_<version>_Darwin_arm64.tar.gz` |
+| Windows amd64 | `http-proxy-local_<version>_Windows_amd64.zip` |
+| Windows arm64 | `http-proxy-local_<version>_Windows_arm64.zip` |
+
+```sh
+# Example (macOS arm64):
+curl -L https://github.com/Djarvur/http-proxy-local/releases/latest/download/http-proxy-local_<version>_Darwin_arm64.tar.gz | tar xz
+./http-proxy-local --config config.yaml
+```
+
+macOS binaries are **unsigned**. On first run Gatekeeper will block them —
+right-click → Open (or `xattr -d com.apple.quarantine /path/to/binary`) to
+allow execution. See Apple's docs on opening apps from unidentified developers.
+
+### Build from source
+
+Requires Go 1.26+ (or use [mise](https://mise.jdx.dev/) — see Quick start):
+
+```sh
+go install github.com/Djarvur/http-proxy-local/cmd/http-proxy-local@latest
+```
+
+or clone and build:
+
+```sh
+git clone https://github.com/Djarvur/http-proxy-local.git
+cd http-proxy-local
+make build   # produces ./bin/http-proxy-local
+```
 
 ## Routing precedence
 
@@ -322,4 +367,4 @@ http-proxy-local/
 
 ## License
 
-(Add license information here.)
+MIT — see [LICENSE](./LICENSE).
