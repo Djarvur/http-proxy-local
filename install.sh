@@ -86,6 +86,12 @@ echo "install: copying config to $CONFIG_DST"
 install -d -m 0700 "$CONFIG_DIR"
 install -m 0600 ./config.yaml "$CONFIG_DST"
 
+# Place the geo cache if the archive shipped one (warm start; optional).
+if [ -f ./ru-cidrs.cache ]; then
+    echo "install: copying geo cache (warm start)"
+    install -m 0600 ./ru-cidrs.cache "$CONFIG_DIR/ru-cidrs.cache"
+fi
+
 # --- 4. write the launchd plist (user-level LaunchAgent, no root) ---
 
 echo "install: writing launchd plist to $PLIST_DST"

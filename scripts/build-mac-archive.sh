@@ -16,6 +16,7 @@
 set -eu
 
 LIVE_CONFIG="$HOME/.config/http-proxy-local/config.yaml"
+LIVE_CACHE="$HOME/.config/http-proxy-local/ru-cidrs.cache"
 VERSION="0.1.0"
 ARCHIVE_NAME="http-proxy-local-mac-amd64-v${VERSION}.tar.gz"
 STAGE_DIR="dist/archive-build"
@@ -40,6 +41,12 @@ command -v go >/dev/null 2>&1 || die "go not found on PATH. Install Go or use mi
 [ -f ./README.md ] || die "README.md not found in repo root."
 [ -f ./LICENSE ] || die "LICENSE not found in repo root."
 
+# The geo cache is optional — without it the target Mac does a cold RIPE fetch
+# on first launch (the proxy still works, just starts slower). Warn, don't fail.
+if [ ! -f "$LIVE_CACHE" ]; then
+    echo "build: warning: geo cache not found at $LIVE_CACHE — target will cold-fetch on first launch." >&2
+fi
+
 echo "build: staging into $STAGE_DIR"
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
@@ -55,6 +62,13 @@ GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
 
 echo "build: staging config (from live config — contains the upstream credential)"
 install -m 0600 "$LIVE_CONFIG" "$STAGE_DIR/config.yaml"
+
+# Stage the warm geo cache if present (optional — gives the target an instant
+# warm start instead of a cold RIPE fetch on first launch).
+if [ -f "$LIVE_CACHE" ]; then
+    echo "build: staging geo cache (warm start for the target)"
+    install -m 0600 "$LIVE_CACHE" "$STAGE_DIR/ru-cidrs.cache"
+fi
 
 echo "build: staging install.sh, README.md, LICENSE"
 install -m 0755 ./install.sh "$STAGE_DIR/install.sh"
