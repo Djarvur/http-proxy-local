@@ -246,9 +246,9 @@ browsers need it; SOCKS5 is intentionally dumber.
   the shutdown timeout. Also add a test that one listener failing
   unexpectedly tears down the other.
 
-- **[DPI could still fingerprint the TLS-to-msk flow once TG traffic mixes
-  in]** → Not mitigable in http-proxy-local; belongs to the upstream
-  infrastructure (msk/ams). Documented as out-of-scope. The first signal
+- **[DPI could still fingerprint the TLS-to-upstream flow once TG traffic
+  mixes in]** → Not mitigable in http-proxy-local; belongs to the upstream
+  infrastructure. Documented as out-of-scope. The first signal
   will be "Telegram worked yesterday, doesn't today" — at which point the
   cascade is still correct and the problem is elsewhere.
 
@@ -332,8 +332,8 @@ Why rejected despite fitting:
 The one case that would flip this: if we later needed UDP ASSOCIATE
 (implementing UDP relay from scratch is genuinely painful). That case is
 closed by the proposal — the upstream is TCP-only, so UDP has nowhere to go
-even if we implemented it. Reopening it requires an infrastructure change at
-msk/ams, not a code change here.
+even if we implemented it. Reopening it requires an infrastructure change
+upstream, not a code change here.
 
 ### A2: Implement MTProto instead of SOCKS5
 
