@@ -97,7 +97,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          num=$(gh issue list --state open --search '"Periodic CI check failed"' --json number --jq '.[0].number')
+          # No checkout in this job: gh needs an explicit --repo to avoid
+          # failing with "not a git repository".
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search '"Periodic CI check failed"' --json number --jq '.[0].number')
           if [ -n "$num" ]; then
-            gh issue close "$num" --comment "Periodic checks pass again; closing."
+            gh issue close "$num" --repo "$GITHUB_REPOSITORY" --comment "Periodic checks pass again; closing."
           fi
