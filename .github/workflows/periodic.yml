@@ -35,15 +35,11 @@ jobs:
           experimental: true
 
       # govulncheck: known vulnerabilities in dependencies (call-graph aware,
-      # fewer false positives than naive scanning).
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
-      # `go install` drops the binary in GOPATH/bin, which is not on the
-      # runner's PATH — export it so govulncheck resolves.
+      # fewer false positives than naive scanning). go run so the tool needs
+      # no PATH wiring — mise redirects GOBIN away from GOPATH/bin on the
+      # runner, which made `go install` + PATH unresolvable.
       - name: Run govulncheck
-        run: |
-          export PATH="$(go env GOPATH)/bin:$PATH"
-          govulncheck ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
       # go list -m -u all: surface outdated modules (informational, non-fatal).
       - name: List outdated modules
@@ -60,14 +56,19 @@ jobs:
 
       # Install the LATEST golangci-lint (not the pinned version) to surface
       # newly-added lints. Distinct from pr.yml which uses the pinned version
-      # for deterministic gating. go install instead of the upstream master
-      # install.sh, whose embedded checksums keep failing to verify against
-      # the release assets (seen with 2.12.2 on linux and darwin).
+      # for deterministic gating. go install from source instead of the
+      # upstream master install.sh, whose embedded checksums keep failing to
+      # verify against the release assets (seen with 2.12.2 on linux and
+      # darwin). Note the /v2 module path: without it @latest resolves to the
+      # last v1, which rejects this repo's v2 config.
       - name: Install latest golangci-lint
-        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
       - name: Run latest golangci-lint
         run: |
-          export PATH="$(go env GOPATH)/bin:$PATH"
+          # mise redirects GOBIN away from GOPATH/bin on the runner; honor it.
+          bin_dir="$(go env GOBIN)"
+          [ -z "$bin_dir" ] && bin_dir="$(go env GOPATH)/bin"
+          export PATH="$bin_dir:$PATH"
           golangci-lint run ./...
 
   open-issue-on-failure:
