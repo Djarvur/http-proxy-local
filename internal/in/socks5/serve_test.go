@@ -185,7 +185,24 @@ func dialSOCKS(t *testing.T, addr, target string) net.Conn {
 		_ = c.Close()
 		return nil // caller checks for nil to detect refused CONNECT
 	}
-	return c
+	// The reply read above may have pulled tunnel bytes (sent by the fake
+	// origin as soon as the upstream connects) into br's buffer — discarding
+	// br would silently lose them. Wrap the conn so buffered bytes are
+	// served first, mirroring cascade.bufferedConn.
+	return &readAheadConn{r: br, Conn: c}
+}
+
+// readAheadConn serves bufio-buffered bytes first, then falls through to the
+// underlying conn. Mirrors cascade.bufferedConn: the CONNECT reply read can
+// pull early tunnel bytes into the reader's buffer, and losing them would
+// make tests observe a closed-but-empty tunnel (flaky EOF).
+type readAheadConn struct {
+	r *bufio.Reader
+	net.Conn
+}
+
+func (c *readAheadConn) Read(p []byte) (int, error) {
+	return c.r.Read(p)
 }
 
 // TestServe_ConnectTunnelsThroughUpstream proves the full chain:

@@ -38,8 +38,12 @@ jobs:
       # fewer false positives than naive scanning).
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      # `go install` drops the binary in GOPATH/bin, which is not on the
+      # runner's PATH — export it so govulncheck resolves.
       - name: Run govulncheck
-        run: govulncheck ./...
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          govulncheck ./...
 
       # go list -m -u all: surface outdated modules (informational, non-fatal).
       - name: List outdated modules
@@ -56,13 +60,15 @@ jobs:
 
       # Install the LATEST golangci-lint (not the pinned version) to surface
       # newly-added lints. Distinct from pr.yml which uses the pinned version
-      # for deterministic gating.
+      # for deterministic gating. go install instead of the upstream master
+      # install.sh, whose embedded checksums keep failing to verify against
+      # the release assets (seen with 2.12.2 on linux and darwin).
       - name: Install latest golangci-lint
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh |
-            sh -s -- -b /usr/local/bin
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
       - name: Run latest golangci-lint
-        run: golangci-lint run ./...
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          golangci-lint run ./...
 
   open-issue-on-failure:
     needs: [test, dependency-check, latest-linter]
@@ -78,3 +84,19 @@ jobs:
           filename: .github/PERIODIC_FAILURE.md
           update_existing: true
           search_existing: open
+
+  # PERIODIC_FAILURE.md promises the failure issue auto-closes on the next
+  # passing run; implement that promise (create-an-issue only ever opens).
+  close-issue-on-success:
+    needs: [test, dependency-check, latest-linter]
+    if: always() && needs.test.result == 'success' && needs.dependency-check.result == 'success' && needs.latest-linter.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close stale failure issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          num=$(gh issue list --state open --search '"Periodic CI check failed"' --json number --jq '.[0].number')
+          if [ -n "$num" ]; then
+            gh issue close "$num" --comment "Periodic checks pass again; closing."
+          fi
