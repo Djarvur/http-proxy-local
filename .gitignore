@@ -9,6 +9,7 @@
 # Agent session artifacts (ZCode, Claude Code) — not project files.
 /.zcode/
 /.claude/
+/.hermes/
 
 # Superpowers SDD scratch (task briefs, reports, review diffs).
 /.superpowers/

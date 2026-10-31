@@ -204,7 +204,8 @@ func TestGeoFetcher_NoCacheFetchFails_ProceedsWithEmptyRanges(t *testing.T) {
 
 	// Error logged.
 	select {
-	case <-errs:
+	case e := <-errs:
+		_ = e // presence of the error is the assertion, content unused
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("expected an error for fetch failure, got none")
 	}
@@ -237,7 +238,8 @@ func TestGeoFetcher_StaleCacheFetchFails_FallsBackToStale(t *testing.T) {
 	waitForRanges(t, rangesPtr, 42)
 
 	select {
-	case <-errs:
+	case e := <-errs:
+		_ = e // presence of the error is the assertion, content unused
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("expected error for stale+fail")
 	}
