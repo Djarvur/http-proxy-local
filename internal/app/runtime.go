@@ -158,6 +158,14 @@ func (o *ReloadOrchestrator) Reload() {
 		o.report(restartRequiredError{Field: "smart.listen", Old: old.Smart.Listen, New: newCfg.Smart.Listen})
 	}
 
+	// If transparent.listen changed (including the block being added or
+	// removed), warn that a restart is required — the transparent listener is
+	// not rebound, started, or stopped mid-flight (same posture as
+	// socks5.listen/smart.listen).
+	if old != nil && old.Transparent.Listen != newCfg.Transparent.Listen {
+		o.report(restartRequiredError{Field: "transparent.listen", Old: old.Transparent.Listen, New: newCfg.Transparent.Listen})
+	}
+
 	// Signal PAC regen if any PAC-affecting field changed.
 	if old == nil || pacAffectingChanged(old, &newCfg) {
 		o.signalRegen()

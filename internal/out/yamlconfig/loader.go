@@ -104,6 +104,14 @@ func (Loader) Validate(c port.Config) error {
 		}
 	}
 
+	// transparent.listen mirrors socks5.listen: empty = disabled = valid;
+	// non-empty MUST parse as host:port.
+	if c.Transparent.Listen != "" {
+		if _, _, err := net.SplitHostPort(c.Transparent.Listen); err != nil {
+			return fmt.Errorf("%w: transparent.listen %q is not host:port: %w", port.ErrValidation, c.Transparent.Listen, err)
+		}
+	}
+
 	return validateSmart(c.Smart)
 }
 

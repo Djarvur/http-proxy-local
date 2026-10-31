@@ -14,6 +14,7 @@ import (
 
 	"github.com/Djarvur/http-proxy-local/internal/app"
 	httpserver "github.com/Djarvur/http-proxy-local/internal/in/http"
+	"github.com/Djarvur/http-proxy-local/internal/in/transparent"
 	"github.com/Djarvur/http-proxy-local/internal/out/fscache"
 	"github.com/Djarvur/http-proxy-local/internal/out/fsnotify"
 	"github.com/Djarvur/http-proxy-local/internal/out/ripe"
@@ -56,14 +57,7 @@ func (realClock) Now() time.Time { return time.Now() }
 // This is the single place where the dependency graph is assembled. main()
 // is a thin flags+signal shell around this.
 func Run(ctx context.Context, configPath string) error {
-	if configPath == "" {
-		p, err := defaultConfigPath()
-		if err != nil {
-			return err
-		}
-		configPath = p
-	}
-	cachePath, err := defaultCachePath()
+	configPath, cachePath, err := resolvePaths(configPath)
 	if err != nil {
 		return err
 	}
@@ -156,17 +150,26 @@ func Run(ctx context.Context, configPath string) error {
 		ReadHeaderTimeout: 10 * time.Second, // mitigates Slowloris (gosec G112)
 	}
 
-	// Bind the opt-in listeners (SOCKS5 and smart HTTP). Both are disabled
-	// when their listen address is empty — full backward compatibility.
-	socksLn, smartLn, smartSrv, err := bindOptInListeners(initial, cfgPtr, rangesPtr, ln)
+	// Bind the opt-in listeners (SOCKS5, smart HTTP, transparent). Each is
+	// disabled when its listen address is empty — full backward compatibility.
+	optIn, err := bindOptInListeners(initial, cfgPtr, rangesPtr, ln)
 	if err != nil {
 		return err
 	}
+	defer optIn.transparentStop()
 
 	// serveAll blocks until ctx is cancelled OR any listener exits. On exit it
 	// shuts all running listeners down (design D2: any failing tears down the
-	// others — a half-broken process is worse than a clean exit).
-	serveErr := serveAll(ctx, srv, ln, socksLn, smartSrv, smartLn, cfgPtr)
+	// others — a half-broken process is worse than a clean exit). The
+	// transparent listener's lifecycle is bound to ln's lifetime: its ctx
+	// cancels when serveAll returns.
+	transparentCtx, transparentCancel := context.WithCancel(ctx)
+	defer transparentCancel()
+	if optIn.transparentSrv != nil && optIn.transparentLn != nil {
+		go optIn.transparentSrv.Serve(transparentCtx, optIn.transparentLn)
+	}
+
+	serveErr := serveAll(ctx, srv, ln, optIn.socksLn, optIn.smartSrv, optIn.smartLn, cfgPtr)
 	_ = errsDone // see comment above about errs being left open
 	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
@@ -174,9 +177,53 @@ func Run(ctx context.Context, configPath string) error {
 	return nil
 }
 
-// bindOptInListeners binds the SOCKS5 and smart HTTP listeners when their
-// respective listen addresses are non-empty (design D3/D8: empty = disabled).
-// On any bind failure it closes everything already bound and returns an error.
+// resolvePaths fills in the default config and cache paths when the operator
+// did not pass -config. Extracted from Run to keep its complexity in budget.
+func resolvePaths(configPath string) (cfgPath, cachePath string, err error) {
+	if configPath == "" {
+		cfgPath, err = defaultConfigPath()
+		if err != nil {
+			return "", "", err
+		}
+	} else {
+		cfgPath = configPath
+	}
+	cachePath, err = defaultCachePath()
+	if err != nil {
+		return "", "", err
+	}
+	return cfgPath, cachePath, nil
+}
+
+// optInListeners bundles the opt-in listener bindings bindOptInListeners
+// produced, plus per-listener stop functions. Nil listeners/channels mean the
+// feature is disabled; every stop function is always non-nil (no-op when
+// disabled) so shutdown paths don't need nil checks.
+type optInListeners struct {
+	socksLn        net.Listener
+	smartLn        net.Listener
+	smartSrv       *http.Server
+	transparentLn  net.Listener
+	transparentSrv *transparent.Server
+}
+
+// transparentStop stops the transparent listener (no-op when disabled). (The
+// SOCKS5 and smart listeners keep the existing shutdown plumbing; their stops
+// live in serveAll.)
+func (o optInListeners) transparentStop() {
+	if o.transparentLn != nil {
+		_ = o.transparentLn.Close()
+	}
+}
+
+// bindOptInListeners binds the SOCKS5, smart HTTP, and transparent listeners
+// when their respective listen addresses are non-empty (design D3/D8 and the
+// add-transparent-listener change: empty = disabled). On any bind failure it
+// closes everything already bound and returns an error. On a non-Linux
+// platform a non-empty transparent.listen is a startup FAILURE, not a silent
+// skip — the operator asked for interception; a silently disabled feature
+// looks like a broken network (design D6).
+//
 // ln is the already-bound dumb HTTP listener (closed on failure so the caller
 // doesn't leak it).
 func bindOptInListeners(
@@ -184,27 +231,43 @@ func bindOptInListeners(
 	cfgPtr *atomic.Pointer[port.Config],
 	rangesPtr *atomic.Pointer[port.RURanges],
 	ln net.Listener,
-) (socksLn net.Listener, smartLn net.Listener, smartSrv *http.Server, err error) {
+) (res optInListeners, err error) {
+	fail := func(e error) (optInListeners, error) {
+		_ = ln.Close()
+		_ = res.socksLn.Close()
+		_ = smartLnClose(res.smartLn)
+		_ = shutdownSrv(res.smartSrv)
+		_ = res.transparentLn.Close()
+		return optInListeners{}, e
+	}
+
 	if initial.SOCKS5.Listen != "" {
-		socksLn, err = net.Listen("tcp", initial.SOCKS5.Listen)
+		res.socksLn, err = net.Listen("tcp", initial.SOCKS5.Listen)
 		if err != nil {
-			_ = ln.Close()
-			return nil, nil, nil, fmt.Errorf("listen socks5 on %s: %w", initial.SOCKS5.Listen, err)
+			return fail(fmt.Errorf("listen socks5 on %s: %w", initial.SOCKS5.Listen, err))
 		}
 	}
 	if initial.Smart.Listen != "" {
-		smartLn, err = net.Listen("tcp", initial.Smart.Listen)
+		res.smartLn, err = net.Listen("tcp", initial.Smart.Listen)
 		if err != nil {
-			_ = ln.Close()
-			_ = socksLnClose(socksLn)
-			return nil, nil, nil, fmt.Errorf("listen smart on %s: %w", initial.Smart.Listen, err)
+			return fail(fmt.Errorf("listen smart on %s: %w", initial.Smart.Listen, err))
 		}
-		smartSrv = &http.Server{
+		res.smartSrv = &http.Server{
 			Handler:           httpserver.NewSmart(cfgPtr, rangesPtr, net.DefaultResolver, httpserver.NewNegativeCache()),
 			ReadHeaderTimeout: 10 * time.Second, // mitigates Slowloris (gosec G112)
 		}
 	}
-	return socksLn, smartLn, smartSrv, nil
+	if initial.Transparent.Listen != "" {
+		if !transparentSupported() {
+			return fail(fmt.Errorf("transparent.listen %s: transparent interception requires Linux (SO_ORIGINAL_DST is unavailable on this platform)", initial.Transparent.Listen))
+		}
+		res.transparentLn, err = net.Listen("tcp", initial.Transparent.Listen)
+		if err != nil {
+			return fail(fmt.Errorf("listen transparent on %s: %w", initial.Transparent.Listen, err))
+		}
+		res.transparentSrv = transparent.NewServer(cfgPtr, rangesPtr, net.DefaultResolver)
+	}
+	return res, nil
 }
 
 // waitForFirstPAC polls pacPtr until it's non-nil or ctx is done.

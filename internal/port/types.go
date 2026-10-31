@@ -16,13 +16,27 @@ import (
 // published atomically by the config-reload goroutine and read per-request by
 // the proxy handler and PAC generator.
 type Config struct {
-	Listen   string   `yaml:"listen"`
-	Upstream Upstream `yaml:"upstream"`
-	Geo      Geo      `yaml:"geo"`
-	Routing  Routing  `yaml:"routing"`
-	PAC      PAC      `yaml:"pac"`
-	SOCKS5   SOCKS5   `yaml:"socks5"`
-	Smart    Smart    `yaml:"smart"`
+	Listen      string       `yaml:"listen"`
+	Upstream    Upstream     `yaml:"upstream"`
+	Geo         Geo          `yaml:"geo"`
+	Routing     Routing      `yaml:"routing"`
+	PAC         PAC          `yaml:"pac"`
+	SOCKS5      SOCKS5       `yaml:"socks5"`
+	Smart       Smart        `yaml:"smart"`
+	Transparent Transparent  `yaml:"transparent"`
+}
+
+// Transparent governs the optional transparent (redirect-capture) inbound
+// listener — the fourth opt-in listener, capturing firewall-redirected TCP
+// connections and recovering the original destination via SO_ORIGINAL_DST
+// (Linux-only). The listener starts if and only if Listen is non-empty, the
+// same posture as SOCKS5/Smart (change add-transparent-listener: NO
+// activating default port). Empty means disabled; the process then behaves
+// identically to a build without the feature. The RECOMMENDED value
+// 127.0.0.1:12345 is documentation only (it matches the existing iptables
+// REDIRECT target port), never applied by the loader.
+type Transparent struct {
+	Listen string `yaml:"listen"`
 }
 
 // SOCKS5 governs the optional SOCKS5 inbound listener. The listener starts
