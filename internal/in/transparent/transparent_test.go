@@ -8,13 +8,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -76,15 +77,26 @@ func drainedPipe(t *testing.T) net.Conn {
 	return c1
 }
 
-// captureLog redirects the log package output into a buffer for the duration
-// of the test.
-func captureLog(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	old := log.Writer()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(old) })
-	return &buf
+// syncBuf is a race-free log sink for tests: Server.logf writes from
+// per-connection goroutines while the test reads.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+// Printf appends one formatted line.
+func (s *syncBuf) Printf(format string, args ...any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, _ = fmt.Fprintf(&s.b, format, args...)
+	s.b.WriteByte('\n')
+}
+
+// String returns everything logged so far.
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 // TestHandleConn_OrigDstFailureClosesConn proves a getsockopt failure closes
@@ -94,8 +106,10 @@ func TestHandleConn_OrigDstFailureClosesConn(t *testing.T) {
 
 	cfg := cfgFor()
 	srv := &Server{
-		cfgPtr:   cfgPtrOf(&cfg),
-		origDst:  func(context.Context, net.Conn) (string, error) { return "", errors.New("no original destination (not redirected?)") },
+		cfgPtr: cfgPtrOf(&cfg),
+		origDst: func(context.Context, net.Conn) (string, error) {
+			return "", errors.New("no original destination (not redirected?)")
+		},
 		negCache: dialchain.NewNegativeCache(),
 	}
 
@@ -207,9 +221,9 @@ func TestHandleConn_RoutesByOriginalDst(t *testing.T) {
 // TestHandleConn_DirectWarns proves a Direct-capable strategy logs a warning
 // naming the destination, and the connection still proceeds.
 func TestHandleConn_DirectWarns(t *testing.T) {
-	// No t.Parallel: captureLog swaps the process-global log writer, and a
-	// concurrent log-asserting test would steal this test's lines.
-	logBuf := captureLog(t)
+	t.Parallel()
+
+	logBuf := &syncBuf{}
 	cfg := cfgFor()
 	ranges := &port.RURanges{Ranges: []port.Range{{Low: ipRange(5, 6, 7, 0), High: ipRange(5, 6, 7, 255)}}}
 
@@ -225,6 +239,7 @@ func TestHandleConn_DirectWarns(t *testing.T) {
 			return nil, errors.New("upstream must not be dialed for RU")
 		},
 		negCache: dialchain.NewNegativeCache(),
+		logf:     logBuf.Printf,
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -264,8 +279,9 @@ func TestHandleConn_DirectWarns(t *testing.T) {
 // TestHandleConn_UpstreamOnlyDoesNotWarn proves default targets produce no
 // loop warning.
 func TestHandleConn_UpstreamOnlyDoesNotWarn(t *testing.T) {
-	// No t.Parallel: see TestHandleConn_DirectWarns.
-	logBuf := captureLog(t)
+	t.Parallel()
+
+	logBuf := &syncBuf{}
 	cfg := cfgFor()
 
 	srv := &Server{
@@ -278,6 +294,7 @@ func TestHandleConn_UpstreamOnlyDoesNotWarn(t *testing.T) {
 		},
 		upstream: func(string) (net.Conn, error) { return drainedPipe(t), nil },
 		negCache: dialchain.NewNegativeCache(),
+		logf:     logBuf.Printf,
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -42,6 +42,10 @@ type Server struct {
 	// negCache is shared across connections handled by this server — the
 	// negative cache is host-level state, per spec.
 	negCache *dialchain.NegativeCache
+	// logf is the log sink for per-connection lines (warnings, failures).
+	// nil means the standard logger; tests inject a buffer instead of swapping
+	// the process-global log writer (which races with parallel tests).
+	logf func(format string, args ...any)
 }
 
 // NewServer constructs a transparent listener server wired to the real
@@ -93,7 +97,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("transparent accept: %v", err)
+			s.logfOf()("transparent accept: %v", err)
 			return
 		}
 		go s.HandleConn(ctx, conn)
@@ -109,13 +113,13 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 
 	target, err := s.origDst(ctx, conn)
 	if err != nil {
-		log.Printf("transparent: recover original destination: %v", err)
+		s.logfOf()("transparent: recover original destination: %v", err)
 		return
 	}
 
 	cfg := s.cfgPtr.Load()
 	if cfg == nil {
-		log.Printf("transparent %s: no config published", target)
+		s.logfOf()("transparent %s: no config published", target)
 		return
 	}
 	rg := port.RURanges{}
@@ -129,7 +133,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	// convention (never blacklist interception-ipset CIDRs); it does not
 	// block or alter routing.
 	if hasDirectStrategy(s.resolve, target, *cfg, rg) {
-		log.Printf("transparent %s: WARNING routing resolves to Direct — this destination must NOT be in the interception ipset (loop risk)", target)
+		s.logfOf()("transparent %s: WARNING routing resolves to Direct — this destination must NOT be in the interception ipset (loop risk)", target)
 	}
 
 	upstreamFn := s.upstream
@@ -139,7 +143,7 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	chain := dialchain.New(s.resolve, s.dialer, upstreamFn, s.negCache)
 	outbound, err := chain.Dial(ctx, target, *cfg, rg)
 	if err != nil {
-		log.Printf("transparent %s: all strategies failed: %v", target, err)
+		s.logfOf()("transparent %s: all strategies failed: %v", target, err)
 		return
 	}
 	defer func() { _ = outbound.Close() }()
@@ -147,6 +151,15 @@ func (s *Server) HandleConn(ctx context.Context, conn net.Conn) {
 	// Raw relay — no protocol, no deadlines (long-lived MTProto tunnels are
 	// the primary client of this listener).
 	cascade.Tunnel(conn, outbound)
+}
+
+// logfOf returns the effective log sink: the injected one when set, otherwise
+// the standard logger.
+func (s *Server) logfOf() func(format string, args ...any) {
+	if s.logf != nil {
+		return s.logf
+	}
+	return log.Printf
 }
 
 // hasDirectStrategy reports whether app.Decide for the target produces a
