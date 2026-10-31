@@ -2,32 +2,31 @@ package httpserver
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"sync/atomic"
-	"time"
 
 	"github.com/Djarvur/http-proxy-local/internal/app"
 	"github.com/Djarvur/http-proxy-local/internal/in/cascade"
+	"github.com/Djarvur/http-proxy-local/internal/in/dialchain"
 	"github.com/Djarvur/http-proxy-local/internal/port"
 )
 
 // resolveFunc resolves a hostname to its IPs. The handler injects an adaptor
 // over net.Resolver.LookupIPAddr; tests inject fakes.
-type resolveFunc func(ctx context.Context, host string) ([]net.IP, error)
+type resolveFunc = dialchain.ResolveFunc
 
 // directDialFunc dials a Direct target (by hostname or by a pinned IP). It is
-// the seam through which the smart handler's Direct path is tested: real
-// usage hands in net.Dialer.DialContext; tests hand in spies.
-type directDialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+// the seam through which the Direct path is tested: real usage hands in
+// net.Dialer.DialContext; tests hand in spies.
+type directDialFunc = dialchain.DirectDialFunc
 
 // upstreamDialFunc dials the configured upstream cascade to a target
 // host:port. Real usage hands in a closure that captures the live
 // port.Upstream and calls cascade.Dial; tests hand in spies.
-type upstreamDialFunc func(target string) (net.Conn, error)
+type upstreamDialFunc = dialchain.UpstreamDialFunc
 
 // NewSmart returns an http.Handler that applies the PAC-equivalent routing
 // precedence server-side for each request and dials the target via the
@@ -90,18 +89,11 @@ func newSmartHandler(
 // evaluates the precedence via app.Decide, and walks the resulting strategy
 // list in order until one establishes a connection.
 //
-// Direct strategy semantics:
-//   - If the host is in the negative cache (and this is the blacklist fallback
-//     path), skip the Direct attempt and move to the next strategy.
-//   - Otherwise dial up to cfg.Smart.DialAttempts times, each bounded by
-//     cfg.Smart.DialTimeout. On all-attempts failure, mark the host negative
-//     (TTL from cfg.Smart.NegativeCacheTTL) and continue.
-//   - For the RU-geo rule, dial the pinned DialIP; for other Direct rules,
-//     dial by hostname. RU failures do NOT mark the negative cache (there is
-//     no fallback to skip).
-//
-// Upstream strategy semantics: dial via the upstream closure once. Upstream
-// failures never consult or update the negative cache.
+// The behavior (Direct timeout/attempt bounds, negative-cache consult/record,
+// RU-IP pinning, upstream fallback) lives in the shared dialchain package
+// (design D1) so the transparent listener walks strategies identically.
+// Tuning is read from cfg.Smart in both listeners — one tuning block governs
+// the two strategy-dialing listeners.
 func smartDial(
 	ctx context.Context,
 	target string, // host:port
@@ -112,90 +104,8 @@ func smartDial(
 	upstream upstreamDialFunc,
 	negCache *negativeCache,
 ) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(target)
-	if err != nil {
-		return nil, fmt.Errorf("smart dial split host:port: %w", err)
-	}
-
-	ips, err := resolve(ctx, host)
-	if err != nil {
-		// Resolution failure is non-fatal: Decide handles nil ips by skipping
-		// CIDR/geo rules and falling through to suffix/plain/default.
-		ips = nil
-	}
-
-	strategies := app.Decide(host, ips, cfg, ranges)
-	for _, s := range strategies {
-		switch s.Path {
-		case app.StrategyDirect:
-			if negCache.IsNegative(host) && hasUpstreamFallback(strategies) {
-				continue // skip doomed Direct, try the fallback
-			}
-			conn, derr := dialDirect(ctx, s, host, port, cfg.Smart.DialTimeout, cfg.Smart.DialAttempts, direct)
-			if derr == nil {
-				return conn, nil
-			}
-			// Only mark negative when there is a downstream fallback to skip.
-			// RU-geo Direct (no fallback) must not pollute the cache.
-			if hasUpstreamFallback(strategies) && cfg.Smart.NegativeCacheTTL > 0 {
-				negCache.MarkNegative(host, cfg.Smart.NegativeCacheTTL)
-			}
-		case app.StrategyUpstream:
-			conn, uerr := upstream(target)
-			if uerr == nil {
-				return conn, nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("all strategies failed for %s", target)
-}
-
-// dialDirect attempts up to attempts Direct dials, each bounded by timeout.
-// The dial target is "<DialIP>:<port>" when the strategy carries a pinned IP
-// (RU-geo), else "<host>:<port>". Returns the first successful conn.
-func dialDirect(
-	ctx context.Context,
-	s app.Strategy,
-	host, port string,
-	timeout time.Duration,
-	attempts int,
-	direct directDialFunc,
-) (net.Conn, error) {
-	if attempts < 1 {
-		attempts = 1
-	}
-	target := host
-	if s.DialIP != nil {
-		target = s.DialIP.String()
-	}
-	addr := net.JoinHostPort(target, port)
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		dialCtx, cancel := context.WithTimeout(ctx, timeout)
-		conn, err := direct(dialCtx, "tcp", addr)
-		cancel()
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
-}
-
-// hasUpstreamFallback reports whether the strategy list contains an Upstream
-// entry after a Direct entry — i.e. whether a Direct failure has somewhere to
-// fall back to. Used to decide whether to consult/populate the negative cache.
-func hasUpstreamFallback(strategies []app.Strategy) bool {
-	seenDirect := false
-	for _, s := range strategies {
-		if s.Path == app.StrategyDirect {
-			seenDirect = true
-		}
-		if seenDirect && s.Path == app.StrategyUpstream {
-			return true
-		}
-	}
-	return false
+	chain := dialchain.New(resolve, direct, upstream, negCache)
+	return chain.Dial(ctx, target, cfg, ranges)
 }
 
 // smartHandleConnect hijacks the client connection, dials the target via
