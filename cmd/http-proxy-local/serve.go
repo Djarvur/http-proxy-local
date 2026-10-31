@@ -81,7 +81,8 @@ func serveAll(
 		_ = socksDoneWait(smartDone)
 		return err
 
-	case <-socksDoneChan(socksDone):
+	case e := <-socksDoneChan(socksDone):
+		_ = e // the error is returned fresh below; only the wakeup matters
 		log.Printf("socks5 listener exited")
 		_ = shutdownBothHTTP(ctx, srv, smartSrv, httpDone, smartDone)
 		_ = smartLnClose(smartLn)
@@ -102,7 +103,8 @@ func shutdownBothHTTP(ctx context.Context, srv, smartSrv *http.Server, httpDone,
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
-	<-httpDone
+	e := <-httpDone
+	_ = e // shutdown path: the Serve error is irrelevant, only completion matters
 	_ = shutdownSrv(smartSrv)
 	_ = socksDoneWait(smartDone)
 	_ = ctx // ctx accepted for symmetry/future use; not currently read
@@ -133,7 +135,8 @@ func shutdownAll(
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
-	<-httpDone
+	e := <-httpDone
+	_ = e // clean-shutdown path: Serve returns ErrServerClosed; nothing to do
 	_ = shutdownSrv(smartSrv)
 	_ = socksDoneWait(smartDone)
 	// Closing socksLn is what unblocks socks5.Serve's Accept loop (its own

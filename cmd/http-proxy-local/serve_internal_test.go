@@ -96,8 +96,8 @@ func TestServeBoth_HTTPAndSOCKS5(t *testing.T) {
 
 	cancel()
 	select {
-	case <-done:
-		// expected
+	case e := <-done:
+		_ = e // serveAll returns nil on clean ctx cancel; only wakeup matters
 	case <-time.After(5 * time.Second):
 		t.Fatal("serveBoth did not return within 5s of cancel (HTTP+SOCKS5 mode)")
 	}
@@ -153,8 +153,8 @@ func TestServeBoth_EitherListenerFailsTearsDownOther(t *testing.T) {
 	_ = socksLn.Close()
 
 	select {
-	case <-done:
-		// expected — serveBoth returned because SOCKS5 failed
+	case e := <-done:
+		_ = e // serveBoth returned because SOCKS5 failed; error content unused here
 	case <-time.After(5 * time.Second):
 		t.Fatal("serveBoth did not return after SOCKS5 listener failed")
 	}

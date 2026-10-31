@@ -274,7 +274,8 @@ geo:
 
 	// An error must be logged.
 	select {
-	case <-errs:
+	case e := <-errs:
+		_ = e // presence of the error is the assertion, content unused
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("expected an error for invalid config, got none")
 	}

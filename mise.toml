@@ -8,8 +8,8 @@
 # upgrades and update .golangci.yml `run.go` to match.
 
 [tools]
-go = "1.26.5"
-golangci-lint = "2.12.2"
+go = "1.27.3"
+golangci-lint = "2.15.0"
 
 # Tasks mirror the Makefile one-to-one so `mise run <task>` and `make <task>`
 # produce identical results.

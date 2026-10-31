@@ -151,3 +151,40 @@ pac:
 #   dial_timeout: 3s           # per-attempt timeout for Direct dials
 #   dial_attempts: 2           # Direct retries before falling back to upstream
 #   negative_cache_ttl: 60s    # how long to remember a Direct failure
+#
+# Optional transparent listener — a FOURTH opt-in listener that captures
+# TCP connections the local firewall redirected to it (iptables REDIRECT),
+# recovers the ORIGINAL destination from the socket (SO_ORIGINAL_DST), applies
+# the same routing precedence as the smart listener, and relays the stream
+# raw. This replaces an external redsocks daemon in the interception chain:
+# the kernel-side plumbing (iptables rule + ipset of intercepted CIDRs + a
+# oneshot service that installs them) stays exactly as is — only the REDIRECT
+# target port now points at this listener instead of redsocks.
+#
+# The listener is OPT-IN: it only starts when `transparent.listen` is
+# non-empty. Omit the block (or leave `listen` empty) and the binary behaves
+# exactly as before (full backward compatibility).
+#
+# The RECOMMENDED value is 127.0.0.1:12345 — the port redsocks used — so the
+# existing `REDIRECT --to-ports 12345` firewall rule needs no change at
+# cutover. It is NOT a default: you MUST write a value to enable.
+#
+# Linux-only: destination recovery uses SO_ORIGINAL_DST, a Linux kernel
+# feature. On non-Linux platforms (macOS) a non-empty `transparent.listen`
+# FAILS startup with a clear error rather than silently ignoring the block.
+#
+# Loop-risk convention: a destination in the interception ipset MUST NEVER be
+# added to `routing.blacklist`. A blacklisted destination dials Direct —
+# straight back into the intercepted CIDR, looping through the firewall
+# redirect forever. The listener logs a WARNING naming the destination when
+# its routing resolves to Direct; treat that warning as a config error.
+#
+# Hot-reload: changing `transparent.listen` (or adding/removing the block)
+# logs a restart-required error — the listener is not rebound, started, or
+# stopped mid-flight. Same posture as `listen`/`socks5.listen`/`smart.listen`.
+#
+# No client authentication: it inherits the localhost-only posture of the
+# other listeners; only connections the local firewall redirected ever reach
+# it.
+# transparent:
+#   listen: 127.0.0.1:12345
