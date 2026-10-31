@@ -74,11 +74,17 @@ internal/
 │   ├── ranges.go              ParseRIPELine, MergeRanges, ParseAndMerge — pure
 │   ├── runtime.go             RunPACRegenerator, ReloadOrchestrator (incl. socks5/smart listen restart-required)
 │   └── geofetcher.go          GeoFetcher — the dual-interval state machine
-├── in/                        inbound adapters (three listeners, shared upstream cascade)
+├── in/                        inbound adapters (four listeners, shared upstream cascade)
 │   ├── http/                  HTTP/PAC adapter (dumb) + smart HTTP adapter (server-side routing)
 │   │   ├── server.go          dumb: /proxy.pac handler + forwarder + CONNECT + basic auth
 │   │   ├── smart.go           smart: NewSmart handler + strategy-driven CONNECT/forward
-│   │   └── negcache.go        smart: hostname-keyed negative cache for failed Direct dials
+│   │   └── negcache.go        smart: alias of the shared negative cache (moved to dialchain)
+│   ├── dialchain/             SHARED strategy-walking dial chain (Decide + Direct/Upstream + negcache)
+│   │   └── dialchain.go       Chain.Dial — used by BOTH the smart and transparent adapters
+│   ├── transparent/           transparent (redirect-capture) adapter — Linux-only, no protocol
+│   │   ├── transparent.go     Server: accept loop, loop-risk warning, dialchain + raw relay
+│   │   ├── originaldst_linux.go  SO_ORIGINAL_DST getsockopt (SOL_IP, option 80)
+│   │   └── originaldst_other.go  ErrLinuxRequired sentinel (non-Linux builds)
 │   ├── socks5/                SOCKS5 (RFC 1928) adapter — CONNECT-only, no auth, no routing
 │   │   ├── doc.go             package contract
 │   │   ├── negotiate.go       method negotiation (only 0x00 No-Auth accepted)
@@ -94,9 +100,9 @@ internal/
     └── yamlconfig/            parse + validate config.yaml (incl. socks5.listen)
 ```
 
-### Three inbound adapters, one upstream cascade
+### Four inbound adapters, one upstream cascade
 
-The proxy has three inbound adapters:
+The proxy has four inbound adapters:
 
 - **HTTP/PAC** (the original, for browsers) — serves `/proxy.pac` and
   forwards everything else to the upstream cascade. Dumb: no routing
@@ -108,20 +114,35 @@ The proxy has three inbound adapters:
   listener on a separate port that applies the PAC-equivalent routing
   precedence *server-side*, emitting an ordered Direct/Upstream strategy
   list per request. See `add-smart-http-listener` for the design.
+- **Transparent** (added for proxy-blind daemons, e.g. a Telegram bot
+  long-polling a DC IP; replaces an external redsocks daemon) — captures
+  firewall-redirected TCP connections (iptables REDIRECT), recovers the
+  original destination via `SO_ORIGINAL_DST` (Linux-only, build-tagged),
+  routes it through the same precedence via the shared dialchain, and relays
+  the raw stream with no protocol. See `add-transparent-listener` for the
+  design (Direct-loop warning policy, port continuity with redsocks,
+  non-Linux startup refusal).
 
-All three share a single upstream cascade (`internal/in/cascade/`): the same
+All four share a single upstream cascade (`internal/in/cascade/`): the same
 `Dial(u, target)` + `Tunnel(a, b)` logic, originally written for the HTTP
 listener's CONNECT handler, was extracted so the subtle tunneling,
 half-close, and buffered-bytes-after-read behaviors live in exactly one
-place. See the `add-socks5-listener` change archive for the SOCKS5 design
+place. The strategy-walking dial chain itself (Decide → ordered
+Direct/Upstream attempts, negative cache, tuning) was later extracted from
+the smart listener into `internal/in/dialchain/` so the transparent adapter
+walks strategies identically instead of duplicating it. See the
+`add-socks5-listener` change archive for the SOCKS5 design
 decisions (SOCKS5 over MTProto, CONNECT-only over UDP ASSOCIATE, no routing
 layer, stdlib hand-roll over go-socks5, manual coordination over
 sourcegraph/conc).
 
-The SOCKS5 and smart HTTP adapters are both **opt-in**: each starts only
-when its `listen` field is non-empty (design decisions D3/D8 — no activating
-default port, full backward compatibility for operators who don't configure
-them).
+The SOCKS5, smart HTTP, and transparent adapters are all **opt-in**: each
+starts only when its `listen` field is non-empty (design decisions D3/D8 and
+the add-transparent-listener change — no activating default port, full
+backward compatibility for operators who don't configure them). The
+transparent adapter additionally REFUSES to start when enabled on a non-Linux
+platform (SO_ORIGINAL_DST does not exist there) instead of silently ignoring
+the block.
 
 #### Smart HTTP listener: server-side routing with parity to the PAC
 

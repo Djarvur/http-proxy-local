@@ -249,6 +249,66 @@ anyway). It resolves hostnames via the system resolver (no application DNS
 cache — the system resolver already caches correctly). See the
 `add-smart-http-listener` change archive for the full design.
 
+## Using the transparent listener (e.g. for proxy-blind daemons)
+
+Some clients cannot be pointed at any proxy at all: they open raw TCP
+connections straight at their target IPs. The classic case is a Telegram bot
+long-polling a Telegram DC — blocked outright on a censored network, and no
+amount of environment variables will reach it because it reads none.
+
+The **transparent listener** solves this at the firewall level, replacing an
+external `redsocks` daemon:
+
+1. An ipset holds the CIDRs to intercept (e.g. Telegram's DC ranges from
+   `core.telegram.org/resources/cidr.txt`).
+2. An iptables rule redirects matching outbound TCP to the listener:
+
+   ```bash
+   iptables -t nat -A OUTPUT -m set --match-set telegram-dc dst -p tcp \
+       -j REDIRECT --to-ports 12345
+   ```
+
+3. The listener recovers the **original destination** from the socket
+   (`SO_ORIGINAL_DST`), applies the same routing precedence as the smart
+   listener, and relays the stream raw — the daemon never knows a proxy is
+   there.
+
+The listener is **opt-in**, Linux-only (`SO_ORIGINAL_DST` is a kernel
+feature; on macOS a non-empty value fails startup), and has no default port:
+
+```yaml
+transparent:
+  listen: 127.0.0.1:12345
+```
+
+### Migrating from redsocks
+
+The kernel-side plumbing (iptables rule, ipset, the oneshot service that
+installs them) stays exactly as is. Because the recommended port is the one
+redsocks used, the cutover is:
+
+1. Build/install the new binary, add the `transparent:` block, restart the
+   service.
+2. Verify interception still works (it now flows through http-proxy-local):
+   `curl --noproxy '*' https://api.telegram.org/` → `302`.
+3. `systemctl disable --now redsocks` and remove it. Rollback: re-enable
+   redsocks, empty `transparent.listen`, restart — the firewall rules never
+   changed.
+
+### The one rule that keeps it from looping
+
+**Never put a CIDR that is in your interception ipset into
+`routing.blacklist`.** A blacklisted destination is dialed **Direct** —
+straight back into the intercepted range, which the firewall redirects to the
+listener again: an infinite loop. The listener logs a `WARNING ... loop risk`
+line naming the destination whenever its routing resolves to Direct; treat
+that warning as a config error. Upstream-routed destinations (the default,
+and the whitelist) never trigger it.
+
+UDP is not intercepted (that would need TPROXY, and the upstream cascade is
+TCP-only anyway) — unchanged from the redsocks status quo. See the
+`add-transparent-listener` change archive for the full design.
+
 ## Hot reload
 
 The config file is watched with fsnotify. **Edit `config.yaml`, save, and
